@@ -1,0 +1,97 @@
+{
+  "name": "popsicle-transport-http",
+  "version": "0.0.0",
+  "description": "Popsicle transport for sending requests over HTTP1 and HTTP2",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "prettier": "prettier --write",
+    "lint": "tslint \"src/**/*.ts\" --project tsconfig.json",
+    "format": "npm run prettier -- README.md \"src/**/*.{js,ts}\"",
+    "build": "rimraf dist && tsc",
+    "specs": "HTTPS_PORT=7358 PORT=7357 jest --coverage",
+    "server:open": "PORT=7357 node scripts/http-server.js & echo $! > server.pid; HTTPS_PORT=7358 node scripts/https-server.js & echo $! > https-server.pid",
+    "server:close": "if [ -f server.pid ]; then kill -9 $(cat server.pid); rm server.pid; fi; if [ -f https-server.pid ]; then kill -9 $(cat https-server.pid); rm https-server.pid; fi",
+    "test": "npm run lint && npm run build && npm run server:open && npm run specs; EXIT=$?; npm run server:close; exit $EXIT",
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/serviejs/popsicle-transport-http.git"
+  },
+  "keywords": [
+    "popsicle",
+    "transport",
+    "http",
+    "http2",
+    "response"
+  ],
+  "author": {
+    "name": "Blake Embrey",
+    "email": "hello@blakeembrey.com",
+    "url": "http://blakeembrey.me"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/serviejs/popsicle-transport-http/issues"
+  },
+  "homepage": "https://github.com/serviejs/popsicle-transport-http",
+  "jest": {
+    "roots": [
+      "<rootDir>/src/"
+    ],
+    "transform": {
+      "\\.tsx?$": "ts-jest"
+    },
+    "testRegex": "(/__tests__/.*|\\.(test|spec))\\.(tsx?|jsx?)$",
+    "moduleFileExtensions": [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json",
+      "node"
+    ]
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.{js,json,css,md}": [
+      "npm run prettier",
+      "git add"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "servie": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^24.0.13",
+    "@types/node": "^12.0.7",
+    "@types/pump": "^1.1.0",
+    "express": "^4.17.1",
+    "husky": "^2.4.0",
+    "jest": "^24.8.0",
+    "lint-staged": "^8.2.0",
+    "prettier": "^1.18.2",
+    "servie": "^4.0.10",
+    "throwback": "^4.1.0",
+    "ts-jest": "^24.0.2",
+    "tslint": "^5.17.0",
+    "tslint-config-prettier": "^1.18.0",
+    "tslint-config-standard": "^8.0.1",
+    "typescript": "^3.5.1"
+  },
+  "dependencies": {
+    "make-error-cause": "^2.2.0",
+    "pump": "^3.0.0"
+  }
+}
