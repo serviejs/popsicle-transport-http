@@ -297,13 +297,6 @@ function execHttp1(
 
     // Track the node.js response.
     function onResponse(rawResponse: IncomingMessage) {
-      const {
-        statusCode: status,
-        statusMessage: statusText,
-        httpVersion,
-        headers
-      } = rawResponse;
-
       // Trailers are populated on "end".
       const trailer = new Promise<HeadersInit>(resolve => {
         rawResponse.once("end", () => resolve(rawResponse.trailers));
@@ -336,11 +329,12 @@ function execHttp1(
       });
 
       const res = new HttpResponse(rawResponse.pipe(new PassThrough()), {
-        status,
-        statusText,
-        headers,
-        trailer,
+        status: rawResponse.statusCode,
+        statusText: rawResponse.statusMessage,
         url: req.url,
+        headers: rawResponse.headers,
+        omitDefaultHeaders: true,
+        trailer,
         connection: {
           localAddress,
           localPort,
@@ -348,7 +342,7 @@ function execHttp1(
           remotePort,
           encrypted
         },
-        httpVersion
+        httpVersion: rawResponse.httpVersion
       });
 
       return resolve(res);
