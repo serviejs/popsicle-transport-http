@@ -501,7 +501,11 @@ export interface TransportOptions {
  * Custom abort error instance.
  */
 export class AbortError extends Error {
-  code = "EABORT"
+  code = "EABORT";
+
+  constructor(public request: Request, message: string) {
+    super(message);
+  }
 }
 
 /**
@@ -525,7 +529,9 @@ export function transport(options: TransportOptions = {}) {
     const url = new URL(req.url, "http://localhost");
     const { hostname: host, protocol } = url;
 
-    if (req.signal.aborted) throw new AbortError("Request has been aborted");
+    if (req.signal.aborted) {
+      throw new AbortError(req, "Request has been aborted");
+    }
 
     if (protocol === "http:") {
       const port = Number(url.port) || 80;
