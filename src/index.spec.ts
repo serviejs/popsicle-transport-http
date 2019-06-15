@@ -44,6 +44,22 @@ describe("popsicle node", () => {
     expect(res.statusText).toEqual("Internal Server Error");
   });
 
+  it("should send path without query", async () => {
+    const req = new Request(`${TEST_HTTP_URL}/url`);
+    const res = await transport()(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(await res.text()).toEqual("/url");
+  });
+
+  it("should send query params", async () => {
+    const req = new Request(`${TEST_HTTP_URL}/url?test=true`);
+    const res = await transport()(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(await res.text()).toEqual("/url?test=true");
+  });
+
   it("should send post data", async () => {
     const req = new Request(`${TEST_HTTP_URL}/echo`, {
       method: "POST",
@@ -61,10 +77,10 @@ describe("popsicle node", () => {
     expect(await res.text()).toEqual("example data");
   });
 
-  it("should stream data", async () => {
+  it("should send stream data", async () => {
     const req = new Request(`${TEST_HTTP_URL}/echo`, {
       method: "POST",
-      body: createReadStream(join(__dirname, '../README.md'))
+      body: createReadStream(join(__dirname, "../README.md"))
     });
 
     const res = await transport()(req, done);

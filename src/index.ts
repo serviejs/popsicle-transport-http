@@ -262,11 +262,11 @@ function execHttp1(
 
     const arg: RequestOptions = {
       protocol: url.protocol,
-      host: url.hostname,
+      hostname: url.hostname,
       port: url.port,
       defaultPort: encrypted ? 443 : 80, // Specify to avoid `Host` header issues.
       method: req.method,
-      path: url.pathname,
+      path: url.pathname + url.search,
       headers: req.headers.asObject(),
       auth:
         url.username || url.password
@@ -274,6 +274,8 @@ function execHttp1(
           : undefined,
       createConnection: () => socket
     };
+
+    socket.ref();
 
     const rawRequest = request(arg);
     const requestStream = new PassThrough();
@@ -392,7 +394,7 @@ function execHttp2(
   return new Promise<Http2Response>((resolve, reject) => {
     // HTTP2 formatted headers.
     const headers = Object.assign(req.headers.asObject(), {
-      [h2constants.HTTP2_HEADER_PATH]: url.pathname,
+      [h2constants.HTTP2_HEADER_PATH]: url.pathname + url.search,
       [h2constants.HTTP2_HEADER_METHOD]: req.method
     });
 
@@ -553,7 +555,6 @@ export function transport(options: TransportOptions = {}) {
               netConnect(socketOptions)
             );
 
-          socket.ref();
           netConnections.use(connectionKey, socket);
 
           if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
@@ -634,7 +635,6 @@ export function transport(options: TransportOptions = {}) {
               tlsConnect(socketOptions)
             );
 
-          socket.ref();
           tlsConnections.use(connectionKey, socket);
 
           if (negotiateHttpVersion === NegotiateHttpVersion.HTTP1_ONLY) {
@@ -734,7 +734,9 @@ function setupSocket<T extends Socket | TLSSocket>(
     manager.freed(key, socket, () => socket.destroy());
   };
 
-  const onClose = () => manager.remove(key, socket);
+  const onClose = () => {
+    manager.remove(key, socket);
+  };
 
   const onRemove = () => {
     socket.removeListener("free", onFree);

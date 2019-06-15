@@ -27,6 +27,10 @@ app.get("/download", function(req, res) {
   }, 200);
 });
 
+app.get("/url", function(req, res) {
+  res.end(req.url);
+});
+
 if (!module.parent) {
   app.listen(process.env.PORT || 3000);
 }
