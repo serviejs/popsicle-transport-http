@@ -225,7 +225,9 @@ function pumpBody(
   if (Buffer.isBuffer(body) || typeof body === "string" || body === null) {
     stream.end(body);
   } else {
-    pump(body, stream, onError);
+    pump(body, stream, err => {
+      if (err) return onError(err);
+    });
   }
 }
 
@@ -468,7 +470,8 @@ function execHttp2(
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
     });
 
-    pump(requestStream, http2Stream, () => {
+    pump(requestStream, http2Stream, err => {
+      if (err) req.signal.emit("error", err);
       req.signal.emit("requestEnded");
     });
 

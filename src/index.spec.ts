@@ -1,5 +1,5 @@
 import { join } from "path";
-import { readFileSync } from "fs";
+import { readFileSync, fstat, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
 import { transport } from "./index";
 
@@ -59,6 +59,20 @@ describe("popsicle node", () => {
     expect(res.statusText).toEqual("OK");
     expect(res.headers.get("Content-Type")).toEqual("application/octet-stream");
     expect(await res.text()).toEqual("example data");
+  });
+
+  it("should stream data", async () => {
+    const req = new Request(`${TEST_HTTP_URL}/echo`, {
+      method: "POST",
+      body: createReadStream(join(__dirname, '../README.md'))
+    });
+
+    const res = await transport()(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(res.statusText).toEqual("OK");
+    expect(res.headers.get("Content-Type")).toEqual("application/octet-stream");
+    expect(await res.text()).toContain("Popsicle Transport HTTP");
   });
 
   it("should abort before it starts", async () => {
