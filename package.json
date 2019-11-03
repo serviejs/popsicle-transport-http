@@ -10,7 +10,7 @@
   "scripts": {
     "prettier": "prettier --write",
     "lint": "tslint \"src/**/*.ts\" --project tsconfig.json",
-    "format": "npm run prettier -- README.md \"src/**/*.{js,ts}\"",
+    "format": "npm run prettier -- \"*.{md,yml,yaml}\" \"src/**/*.{js,jsx,ts,tsx}\"",
     "build": "rimraf dist && tsc",
     "specs": "HTTPS_PORT=7358 PORT=7357 jest --coverage --detectOpenHandles",
     "server:open": "PORT=7357 node scripts/http-server.js & echo $! > server.pid; HTTPS_PORT=7358 node scripts/https-server.js & echo $! > https-server.pid",
@@ -62,7 +62,7 @@
     }
   },
   "lint-staged": {
-    "*.{js,json,css,md}": [
+    "*.{js,jsx,ts,tsx,json,css,md,yml,yaml}": [
       "npm run prettier",
       "git add"
     ]
@@ -78,11 +78,11 @@
     "@types/node": "^12.0.7",
     "@types/pump": "^1.1.0",
     "express": "^4.17.1",
-    "husky": "^2.4.0",
+    "husky": "^3.0.9",
     "jest": "^24.8.0",
-    "lint-staged": "^8.2.0",
+    "lint-staged": "^9.4.2",
     "prettier": "^1.18.2",
-    "servie": "^4.2.1",
+    "servie": "^4.3.2",
     "throwback": "^4.1.0",
     "ts-jest": "^24.0.2",
     "tslint": "^5.17.0",
