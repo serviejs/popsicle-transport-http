@@ -116,7 +116,7 @@ export interface ConcurrencyConnectionManagerOptions {
 export class ConnectionSet<T> {
   used = new Set<T>();
   free = new Set<T>();
-  pend: Array<(connection?: T) => void> = [];
+  pending: Array<(connection?: T) => void> = [];
 }
 
 /**
@@ -146,7 +146,7 @@ export class ConcurrencyConnectionManager<T> extends ConnectionManager<
 
     // Add to "pending" queue.
     if (pool.used.size >= this.maxConnections) {
-      pool.pend.push(onReady);
+      pool.pending.push(onReady);
       return;
     }
 
@@ -182,8 +182,8 @@ export class ConcurrencyConnectionManager<T> extends ConnectionManager<
     if (pool.free.size >= this.maxFreeConnections) return discard();
 
     // Immediately send for connection.
-    if (pool.pend.length) {
-      const onReady = pool.pend.shift()!;
+    if (pool.pending.length) {
+      const onReady = pool.pending.shift()!;
       return onReady(connection);
     }
   }
@@ -197,7 +197,7 @@ export class ConcurrencyConnectionManager<T> extends ConnectionManager<
     if (pool.free.has(connection)) pool.free.delete(connection);
 
     // Remove connection manager from pooling.
-    if (!pool.free.size && !pool.used.size && !pool.pend.length) {
+    if (!pool.free.size && !pool.used.size && !pool.pending.length) {
       this.delete(key, pool);
     }
   }
@@ -275,16 +275,16 @@ function execHttp1(
       createConnection: () => socket
     };
 
-    socket.ref();
+    ref(socket);
 
     const rawRequest = request(arg);
     const requestStream = new PassThrough();
 
     // Handle abort events correctly.
-    req.signal.on("abort", () => {
+    const onAbort = () => {
       socket.emit("agentRemove"); // `abort` destroys the connection with no event.
       rawRequest.abort();
-    });
+    };
 
     // Reuse HTTP connections where possible.
     if (keepAlive > 0) {
@@ -293,22 +293,28 @@ function execHttp1(
     }
 
     // Trigger unavailable error when node.js errors before response.
-    function onRequestError(err: Error) {
+    const onRequestError = (err: Error) => {
+      req.signal.off("abort", onAbort);
+      req.signal.emit("error", err);
+
+      unref(socket);
+      rawRequest.removeListener("response", onResponse);
+
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
       );
-    }
+    };
 
     // Track the node.js response.
-    function onResponse(rawResponse: IncomingMessage) {
+    const onResponse = (rawResponse: IncomingMessage) => {
       // Trailers are populated on "end".
-      const trailer = new Promise<HeadersInit>(resolve => {
-        rawResponse.once("end", () => resolve(rawResponse.trailers));
-      });
+      let resolveTrailers: (headers: HeadersInit) => void;
+      const trailer = new Promise<HeadersInit>(
+        resolve => (resolveTrailers = resolve)
+      );
 
-      // Replace request error listener behaviour.
+      rawRequest.removeListener("response", onResponse);
       rawRequest.removeListener("error", onRequestError);
-      rawRequest.on("error", err => req.signal.emit("error", err));
 
       const {
         address: localAddress,
@@ -323,17 +329,29 @@ function execHttp1(
       let bytesTransferred = 0;
       req.signal.emit("responseStarted");
 
-      // Track response progress.
-      rawResponse.on("data", (chunk: Buffer) => {
-        req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
-      });
+      const onResponseError = (err: Error) => {
+        req.signal.emit("error", err);
+      };
 
-      rawResponse.once("end", () => {
-        req.signal.emit("responseEnded");
-      });
+      const onData = (chunk: Buffer) => {
+        req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
+      };
+
+      rawRequest.once("error", onResponseError);
+      rawResponse.on("data", onData);
 
       const res = new HttpResponse(
-        pump(rawResponse, new PassThrough()) as Readable,
+        pump(rawResponse, new PassThrough(), () => {
+          req.signal.off("abort", onAbort);
+
+          unref(socket);
+          rawRequest.removeListener("error", onResponseError);
+          rawResponse.removeListener("data", onData);
+
+          resolveTrailers(rawResponse.trailers);
+
+          req.signal.emit("responseEnded");
+        }) as Readable,
         {
           status: rawResponse.statusCode,
           statusText: rawResponse.statusMessage,
@@ -353,21 +371,23 @@ function execHttp1(
       );
 
       return resolve(res);
-    }
-
-    rawRequest.once("error", onRequestError);
-    rawRequest.once("response", onResponse);
+    };
 
     let bytesTransferred = 0;
     req.signal.emit("requestStarted");
 
-    // Track request upload progress.
-    requestStream.on("data", (chunk: Buffer) => {
+    const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
-    });
+    };
 
-    pump(requestStream, rawRequest, err => {
-      if (err) req.signal.emit("error", err);
+    req.signal.on("abort", onAbort);
+    rawRequest.once("error", onRequestError);
+    rawRequest.once("response", onResponse);
+    requestStream.on("data", onData);
+
+    pump(requestStream, rawRequest, () => {
+      requestStream.removeListener("data", onData);
+
       req.signal.emit("requestEnded");
     });
 
@@ -406,20 +426,20 @@ function execHttp2(
 
     ref(client.socket); // Request ref tracking.
 
-    // Track when stream finishes.
-    function onClose() {
-      req.signal.emit("requestEnded");
-      unref(client.socket);
-    }
-
     // Trigger unavailable error when node.js errors before response.
-    function onRequestError(err: Error) {
+    const onRequestError = (err: Error) => {
+      req.signal.off("abort", onAbort);
+      req.signal.emit("error", err);
+
+      unref(client.socket);
+      http2Stream.removeListener("response", onResponse);
+
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
       );
-    }
+    };
 
-    function onResponse(headers: IncomingHttpHeaders) {
+    const onResponse = (headers: IncomingHttpHeaders) => {
       const encrypted = (client.socket as TLSSocket).encrypted === true;
       const {
         localAddress,
@@ -428,55 +448,84 @@ function execHttp2(
         remotePort = 0
       } = client.socket;
 
-      // Replace request error listener behaviour with proxy.
+      let resolveTrailers: (headers: HeadersInit) => void;
+      const trailer = new Promise<HeadersInit>(
+        resolve => (resolveTrailers = resolve)
+      );
+
       http2Stream.removeListener("error", onRequestError);
-      http2Stream.on("error", err => req.signal.emit("error", err));
+      http2Stream.removeListener("response", onResponse);
 
       let bytesTransferred = 0;
       req.signal.emit("responseStarted");
 
-      // Track response progress.
-      http2Stream.on("data", (chunk: Buffer) => {
+      const onTrailers = (headers: IncomingHttpHeaders) => {
+        resolveTrailers(headers);
+      };
+
+      const onResponseError = (err: Error) => {
+        req.signal.emit("error", err);
+      };
+
+      const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
-      });
+      };
 
-      http2Stream.once("end", () => {
-        req.signal.emit("responseEnded");
-      });
+      http2Stream.on("data", onData);
+      http2Stream.once("error", onResponseError);
+      http2Stream.once("trailers", onTrailers);
 
-      const res = new Http2Response(http2Stream.pipe(new PassThrough()), {
-        status: Number(headers[h2constants.HTTP2_HEADER_STATUS]),
-        statusText: "",
-        url: req.url,
-        httpVersion: "2.0",
-        headers,
-        connection: {
-          localAddress,
-          localPort,
-          remoteAddress,
-          remotePort,
-          encrypted
+      const res = new Http2Response(
+        pump(http2Stream, new PassThrough(), () => {
+          req.signal.off("abort", onAbort);
+
+          unref(client.socket);
+          http2Stream.removeListener("data", onData);
+          http2Stream.removeListener("data", onTrailers);
+          http2Stream.removeListener("error", onResponseError);
+
+          resolveTrailers({}); // Resolve in case "trailers" wasn't emitted.
+
+          req.signal.emit("responseEnded");
+        }) as Readable,
+        {
+          status: Number(headers[h2constants.HTTP2_HEADER_STATUS]),
+          statusText: "",
+          url: req.url,
+          httpVersion: "2.0",
+          headers,
+          omitDefaultHeaders: true,
+          trailer,
+          connection: {
+            localAddress,
+            localPort,
+            remoteAddress,
+            remotePort,
+            encrypted
+          }
         }
-      });
+      );
 
       return resolve(res);
-    }
-
-    http2Stream.once("error", onRequestError);
-    http2Stream.once("close", onClose);
-    http2Stream.once("response", onResponse);
+    };
 
     let bytesTransferred = 0;
     req.signal.emit("requestStarted");
-    req.signal.on("abort", () => http2Stream.destroy());
 
-    // Track request upload progress.
-    requestStream.on("data", (chunk: Buffer) => {
+    const onAbort = () => http2Stream.destroy();
+
+    const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
-    });
+    };
 
-    pump(requestStream, http2Stream, err => {
-      if (err) req.signal.emit("error", err);
+    req.signal.on("abort", onAbort);
+    http2Stream.once("error", onRequestError);
+    http2Stream.once("response", onResponse);
+    requestStream.on("data", onData);
+
+    pump(requestStream, http2Stream, () => {
+      requestStream.removeListener("data", onData);
+
       req.signal.emit("requestEnded");
     });
 
@@ -656,8 +705,22 @@ export function transport(options: TransportOptions = {}) {
             return resolve(execHttp2(req, url, client));
           }
 
+          const onError = (err: Error) => {
+            socket.removeListener("connect", onConnect);
+
+            return reject(
+              new ConnectionError(
+                req,
+                `Unable to connect to ${host}:${port}`,
+                err
+              )
+            );
+          };
+
           // Execute HTTP connection according to negotiated ALPN protocol.
           const onConnect = () => {
+            socket.removeListener("error", onError);
+
             const alpnProtocol: string | false = (socket as any).alpnProtocol;
 
             // Successfully negotiated HTTP2 connection.
@@ -694,21 +757,10 @@ export function transport(options: TransportOptions = {}) {
           };
 
           // Existing socket may already have negotiated ALPN protocol.
-          if ((socket as any).alpnProtocol !== null) return onConnect();
+          if ((socket as any).alpnProtocol != null) return onConnect();
 
-          // Handle TLS socket connection.
           socket.once("secureConnect", onConnect);
-
-          // Handle socket connection issues.
-          socket.once("error", (err: Error) => {
-            return reject(
-              new ConnectionError(
-                req,
-                `Unable to connect to ${host}:${port}`,
-                err
-              )
-            );
-          });
+          socket.once("error", onError);
         });
       });
     }
@@ -729,15 +781,13 @@ function setupSocket<T extends Socket | TLSSocket>(
   socket: T
 ) {
   const onFree = () => {
-    if (keepAlive > 0) {
-      socket.setKeepAlive(true, keepAlive);
-      socket.unref();
-    }
-
+    if (keepAlive > 0) socket.setKeepAlive(true, keepAlive);
     manager.freed(key, socket, () => socket.destroy());
   };
 
   const onClose = () => {
+    socket.removeListener("free", onFree);
+    socket.removeListener("agentRemove", onRemove);
     manager.remove(key, socket);
   };
 
@@ -794,13 +844,14 @@ function ref(socket: Socket | TLSSocket) {
  */
 function unref(socket: Socket | TLSSocket) {
   const count = SOCKET_REFS.get(socket);
-  if (!count) return;
-  if (count === 1) {
-    socket.unref();
-    SOCKET_REFS.delete(socket);
-    return;
+  if (count) {
+    if (count === 1) {
+      socket.unref();
+      SOCKET_REFS.delete(socket);
+    } else {
+      SOCKET_REFS.set(socket, count - 1);
+    }
   }
-  SOCKET_REFS.set(socket, count - 1);
 }
 
 /**
