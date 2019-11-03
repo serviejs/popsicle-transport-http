@@ -21,7 +21,7 @@ import {
   constants as h2constants,
   ClientHttp2Session
 } from "http2";
-import { PassThrough, Writable } from "stream";
+import { PassThrough, Readable, Writable } from "stream";
 import {
   Request,
   Response,
@@ -332,22 +332,25 @@ function execHttp1(
         req.signal.emit("responseEnded");
       });
 
-      const res = new HttpResponse(rawResponse.pipe(new PassThrough()), {
-        status: rawResponse.statusCode,
-        statusText: rawResponse.statusMessage,
-        url: req.url,
-        headers: rawResponse.headers,
-        omitDefaultHeaders: true,
-        trailer,
-        connection: {
-          localAddress,
-          localPort,
-          remoteAddress,
-          remotePort,
-          encrypted
-        },
-        httpVersion: rawResponse.httpVersion
-      });
+      const res = new HttpResponse(
+        pump(rawResponse, new PassThrough()) as Readable,
+        {
+          status: rawResponse.statusCode,
+          statusText: rawResponse.statusMessage,
+          url: req.url,
+          headers: rawResponse.headers,
+          omitDefaultHeaders: true,
+          trailer,
+          connection: {
+            localAddress,
+            localPort,
+            remoteAddress,
+            remotePort,
+            encrypted
+          },
+          httpVersion: rawResponse.httpVersion
+        }
+      );
 
       return resolve(res);
     }

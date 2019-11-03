@@ -1,12 +1,12 @@
 import { join } from "path";
-import { readFileSync, fstat, createReadStream } from "fs";
+import { readFileSync, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
 import { transport } from "./index";
 
 const TEST_HTTP_URL = `http://localhost:${process.env.PORT}`;
 const TEST_HTTPS_URL = `https://localhost:${process.env.HTTPS_PORT}`;
 
-describe("popsicle node", () => {
+describe("popsicle transport http", () => {
   const done = () => {
     throw new TypeError("Invalid request");
   };
