@@ -294,10 +294,10 @@ function execHttp1(
 
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
+      unref(socket);
       req.signal.off("abort", onAbort);
       req.signal.emit("error", err);
 
-      unref(socket);
       rawRequest.removeListener("response", onResponse);
 
       return reject(
@@ -329,23 +329,18 @@ function execHttp1(
       let bytesTransferred = 0;
       req.signal.emit("responseStarted");
 
-      const onResponseError = (err: Error) => {
-        req.signal.emit("error", err);
-      };
-
       const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
-      rawRequest.once("error", onResponseError);
       rawResponse.on("data", onData);
 
       const res = new HttpResponse(
-        pump(rawResponse, new PassThrough(), () => {
-          req.signal.off("abort", onAbort);
-
+        pump(rawResponse, new PassThrough(), err => {
           unref(socket);
-          rawRequest.removeListener("error", onResponseError);
+          req.signal.off("abort", onAbort);
+          if (err) req.signal.emit("error", err);
+
           rawResponse.removeListener("data", onData);
 
           resolveTrailers(rawResponse.trailers);
@@ -428,10 +423,10 @@ function execHttp2(
 
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
+      unref(client.socket);
       req.signal.off("abort", onAbort);
       req.signal.emit("error", err);
 
-      unref(client.socket);
       http2Stream.removeListener("response", onResponse);
 
       return reject(
@@ -463,26 +458,21 @@ function execHttp2(
         resolveTrailers(headers);
       };
 
-      const onResponseError = (err: Error) => {
-        req.signal.emit("error", err);
-      };
-
       const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
       http2Stream.on("data", onData);
-      http2Stream.once("error", onResponseError);
       http2Stream.once("trailers", onTrailers);
 
       const res = new Http2Response(
-        pump(http2Stream, new PassThrough(), () => {
-          req.signal.off("abort", onAbort);
-
+        pump(http2Stream, new PassThrough(), err => {
           unref(client.socket);
+          req.signal.off("abort", onAbort);
+          if (err) req.signal.emit("error", err);
+
           http2Stream.removeListener("data", onData);
           http2Stream.removeListener("data", onTrailers);
-          http2Stream.removeListener("error", onResponseError);
 
           resolveTrailers({}); // Resolve in case "trailers" wasn't emitted.
 
