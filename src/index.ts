@@ -775,21 +775,16 @@ function setupSocket<T extends Socket | TLSSocket>(
     manager.freed(key, socket, () => socket.destroy());
   };
 
-  const onClose = () => {
+  const cleanup = () => {
     socket.removeListener("free", onFree);
-    socket.removeListener("agentRemove", onRemove);
-    manager.remove(key, socket);
-  };
-
-  const onRemove = () => {
-    socket.removeListener("free", onFree);
-    socket.removeListener("close", onClose);
+    socket.removeListener("close", cleanup);
+    socket.removeListener("agentRemove", cleanup);
     manager.remove(key, socket);
   };
 
   socket.on("free", onFree);
-  socket.once("close", onClose);
-  socket.once("agentRemove", onRemove);
+  socket.on("close", cleanup);
+  socket.on("agentRemove", cleanup);
 
   return socket;
 }
