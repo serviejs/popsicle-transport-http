@@ -411,10 +411,15 @@ function execHttp2(
 ): Promise<Http2Response> {
   return new Promise<Http2Response>((resolve, reject) => {
     // HTTP2 formatted headers.
-    const headers = Object.assign(req.headers.asObject(), {
-      [h2constants.HTTP2_HEADER_PATH]: url.pathname + url.search,
-      [h2constants.HTTP2_HEADER_METHOD]: req.method
-    });
+    const headers = Object.assign(
+      {
+        [h2constants.HTTP2_HEADER_METHOD]: req.method,
+        [h2constants.HTTP2_HEADER_AUTHORITY]: url.host,
+        [h2constants.HTTP2_HEADER_SCHEME]: url.protocol.slice(0, -1),
+        [h2constants.HTTP2_HEADER_PATH]: url.pathname + url.search
+      },
+      req.headers.asObject()
+    );
 
     const http2Stream = client.request(headers, { endStream: false });
     const requestStream = new PassThrough();
@@ -568,7 +573,7 @@ export function transport(options: TransportOptions = {}) {
     next: () => Promise<HttpResponse>
   ): Promise<HttpResponse> {
     const url = new URL(req.url, "http://localhost");
-    const { hostname: host, protocol } = url;
+    const { hostname, protocol } = url;
 
     if (req.signal.aborted) {
       throw new AbortError(req, "Request has been aborted");
@@ -576,7 +581,7 @@ export function transport(options: TransportOptions = {}) {
 
     if (protocol === "http:") {
       const port = Number(url.port) || 80;
-      const connectionKey = `${host}:${port}:${negotiateHttpVersion}`;
+      const connectionKey = `${hostname}:${port}:${negotiateHttpVersion}`;
 
       // Use existing HTTP2 session in HTTP2 mode.
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
@@ -587,7 +592,7 @@ export function transport(options: TransportOptions = {}) {
 
       return new Promise<HttpResponse>(resolve => {
         return netConnections.ready(connectionKey, freeSocket => {
-          const socketOptions: SocketConnectOpts = { host, port };
+          const socketOptions: SocketConnectOpts = { host: hostname, port };
           const socket =
             freeSocket ||
             setupSocket(
@@ -600,9 +605,8 @@ export function transport(options: TransportOptions = {}) {
           netConnections.use(connectionKey, socket);
 
           if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
-            const authority = `${protocol}//${host}:${port}`;
             const client = manageHttp2(
-              authority,
+              url,
               connectionKey,
               keepAlive,
               http2Connections,
@@ -623,9 +627,9 @@ export function transport(options: TransportOptions = {}) {
       const port = Number(url.port) || 443;
       const servername =
         options.servername ||
-        calculateServerName(host, req.headers.get("host"));
+        calculateServerName(hostname, req.headers.get("host"));
       const rejectUnauthorized = options.rejectUnauthorized !== false;
-      const connectionKey = `${host}:${port}:${negotiateHttpVersion}:${servername}:${rejectUnauthorized}:${ca ||
+      const connectionKey = `${hostname}:${port}:${negotiateHttpVersion}:${servername}:${rejectUnauthorized}:${ca ||
         ""}:${cert || ""}:${key || ""}:${secureProtocol || ""}`;
 
       // Use an existing TLS session to speed up handshake.
@@ -635,7 +639,7 @@ export function transport(options: TransportOptions = {}) {
       const session = existingSocket ? existingSocket.getSession() : undefined;
 
       const socketOptions: TlsConnectOpts = {
-        host,
+        host: hostname,
         port,
         servername,
         rejectUnauthorized,
@@ -685,7 +689,7 @@ export function transport(options: TransportOptions = {}) {
 
           if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
             const client = manageHttp2(
-              `${protocol}//${host}:${port}`,
+              url,
               connectionKey,
               keepAlive,
               http2Connections,
@@ -701,7 +705,7 @@ export function transport(options: TransportOptions = {}) {
             return reject(
               new ConnectionError(
                 req,
-                `Unable to connect to ${host}:${port}`,
+                `Unable to connect to ${hostname}:${port}`,
                 err
               )
             );
@@ -724,7 +728,7 @@ export function transport(options: TransportOptions = {}) {
               }
 
               const client = manageHttp2(
-                `${protocol}//${host}:${port}`,
+                url,
                 connectionKey,
                 keepAlive,
                 http2Connections,
@@ -793,17 +797,18 @@ function setupSocket<T extends Socket | TLSSocket>(
  * Set up a HTTP2 working session.
  */
 function manageHttp2<T extends Socket | TLSSocket>(
-  authority: string,
+  authority: URL,
   key: string,
   keepAlive: number,
   manager: ConnectionManager<ClientHttp2Session>,
   socket: T
 ) {
-  // TODO: Fix node.js types.
-  const connectOptions: any = { createConnection: () => socket };
+  const connectOptions = { createConnection: () => socket };
   const client = http2Connect(authority, connectOptions);
 
   manager.set(key, client);
+  client.once("error", () => manager.delete(key, client));
+  client.once("goaway", () => manager.delete(key, client));
   client.once("close", () => manager.delete(key, client));
   client.setTimeout(keepAlive, () => client.close());
 
