@@ -1,6 +1,6 @@
 {
   "name": "popsicle-transport-http",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Popsicle transport for sending requests over HTTP1 and HTTP2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
