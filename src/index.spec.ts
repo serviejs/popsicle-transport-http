@@ -5,6 +5,9 @@ import { transport } from "./index";
 
 const TEST_HTTP_URL = `http://localhost:${process.env.PORT}`;
 const TEST_HTTPS_URL = `https://localhost:${process.env.HTTPS_PORT}`;
+const TEST_HTTP2_URL = `https://localhost:${process.env.HTTP2_PORT}`;
+
+const ca = readFileSync(join(__dirname, "../scripts/support/ca-crt.pem"));
 
 describe("popsicle transport http", () => {
   const done = () => {
@@ -65,8 +68,8 @@ describe("popsicle transport http", () => {
       method: "POST",
       body: "example data",
       headers: {
-        "content-type": "application/octet-stream"
-      }
+        "content-type": "application/octet-stream",
+      },
     });
 
     const res = await transport()(req, done);
@@ -80,7 +83,7 @@ describe("popsicle transport http", () => {
   it("should send stream data", async () => {
     const req = new Request(`${TEST_HTTP_URL}/echo`, {
       method: "POST",
-      body: createReadStream(join(__dirname, "../README.md"))
+      body: createReadStream(join(__dirname, "../README.md")),
     });
 
     const res = await transport()(req, done);
@@ -94,7 +97,7 @@ describe("popsicle transport http", () => {
   it("should abort before it starts", async () => {
     const controller = new AbortController();
     const req = new Request(`${TEST_HTTP_URL}/echo`, {
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     controller.abort();
@@ -160,7 +163,6 @@ describe("popsicle transport http", () => {
 
   it.skip("should support https ca option", async () => {
     const req = new Request(TEST_HTTPS_URL);
-    const ca = readFileSync(join(__dirname, "../scripts/support/ca-crt.pem"));
     const res = await transport({ ca })(req, done);
 
     expect(res.status).toEqual(200);
@@ -172,6 +174,15 @@ describe("popsicle transport http", () => {
     const res = await transport({ rejectUnauthorized: false })(req, done);
 
     expect(res.status).toEqual(200);
+    expect(await res.text()).toEqual("Success");
+  });
+
+  it("should connect to http2 server", async () => {
+    const req = new Request(TEST_HTTP2_URL);
+    const res = await transport({ rejectUnauthorized: false })(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(res.httpVersion).toEqual("2.0");
     expect(await res.text()).toEqual("Success");
   });
 });

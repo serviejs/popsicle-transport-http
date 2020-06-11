@@ -7,19 +7,19 @@ import {
   connect as netConnect,
   Socket,
   SocketConnectOpts,
-  AddressInfo
+  AddressInfo,
 } from "net";
 import {
   connect as tlsConnect,
   SecureContext,
   TLSSocket,
-  ConnectionOptions as TlsConnectOpts
+  ConnectionOptions as TlsConnectOpts,
 } from "tls";
 import {
   connect as http2Connect,
   IncomingHttpHeaders,
   constants as h2constants,
-  ClientHttp2Session
+  ClientHttp2Session,
 } from "http2";
 import { PassThrough, Readable, Writable } from "stream";
 import {
@@ -27,7 +27,7 @@ import {
   Response,
   CreateBody,
   ResponseOptions,
-  HeadersInit
+  HeadersInit,
 } from "servie/dist/node";
 import { useRawBody } from "servie/dist/common";
 
@@ -96,15 +96,8 @@ export class ConnectionManager<T> {
     return connection;
   }
 
-  delete(key: string, connection: T) {
-    const existing = this.connections.get(key);
-
-    if (existing !== connection) {
-      throw new TypeError("Connection for key does not match");
-    }
-
+  delete(key: string) {
     this.connections.delete(key);
-    return connection;
   }
 }
 
@@ -198,7 +191,7 @@ export class ConcurrencyConnectionManager<T> extends ConnectionManager<
 
     // Remove connection manager from pooling.
     if (!pool.free.size && !pool.used.size && !pool.pending.length) {
-      this.delete(key, pool);
+      this.delete(key);
     }
   }
 }
@@ -209,7 +202,7 @@ export class ConcurrencyConnectionManager<T> extends ConnectionManager<
 export enum NegotiateHttpVersion {
   HTTP1_ONLY,
   HTTP2_FOR_HTTPS,
-  HTTP2_ONLY
+  HTTP2_ONLY,
 }
 
 /**
@@ -225,7 +218,7 @@ function pumpBody(
   if (Buffer.isBuffer(body) || typeof body === "string" || body === null) {
     stream.end(body);
   } else {
-    pump(body, stream, err => {
+    pump(body, stream, (err) => {
       if (err) return onError(err);
     });
   }
@@ -272,7 +265,7 @@ function execHttp1(
         url.username || url.password
           ? `${url.username}:${url.password}`
           : undefined,
-      createConnection: () => socket
+      createConnection: () => socket,
     };
 
     ref(socket);
@@ -296,7 +289,6 @@ function execHttp1(
     const onRequestError = (err: Error) => {
       unref(socket);
       req.signal.off("abort", onAbort);
-      req.signal.emit("error", err);
 
       rawRequest.removeListener("response", onResponse);
 
@@ -310,7 +302,7 @@ function execHttp1(
       // Trailers are populated on "end".
       let resolveTrailers: (headers: HeadersInit) => void;
       const trailer = new Promise<HeadersInit>(
-        resolve => (resolveTrailers = resolve)
+        (resolve) => (resolveTrailers = resolve)
       );
 
       rawRequest.removeListener("response", onResponse);
@@ -318,12 +310,12 @@ function execHttp1(
 
       const {
         address: localAddress,
-        port: localPort
+        port: localPort,
       } = rawRequest.connection.address() as AddressInfo;
 
       const {
         address: remoteAddress,
-        port: remotePort
+        port: remotePort,
       } = rawResponse.connection.address() as AddressInfo;
 
       let bytesTransferred = 0;
@@ -336,7 +328,7 @@ function execHttp1(
       rawResponse.on("data", onData);
 
       const res = new HttpResponse(
-        pump(rawResponse, new PassThrough(), err => {
+        pump(rawResponse, new PassThrough(), (err) => {
           unref(socket);
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
@@ -359,9 +351,9 @@ function execHttp1(
             localPort,
             remoteAddress,
             remotePort,
-            encrypted
+            encrypted,
           },
-          httpVersion: rawResponse.httpVersion
+          httpVersion: rawResponse.httpVersion,
         }
       );
 
@@ -416,7 +408,7 @@ function execHttp2(
         [h2constants.HTTP2_HEADER_METHOD]: req.method,
         [h2constants.HTTP2_HEADER_AUTHORITY]: url.host,
         [h2constants.HTTP2_HEADER_SCHEME]: url.protocol.slice(0, -1),
-        [h2constants.HTTP2_HEADER_PATH]: url.pathname + url.search
+        [h2constants.HTTP2_HEADER_PATH]: url.pathname + url.search,
       },
       req.headers.asObject()
     );
@@ -430,7 +422,6 @@ function execHttp2(
     const onRequestError = (err: Error) => {
       unref(client.socket);
       req.signal.off("abort", onAbort);
-      req.signal.emit("error", err);
 
       http2Stream.removeListener("response", onResponse);
 
@@ -445,12 +436,12 @@ function execHttp2(
         localAddress,
         localPort,
         remoteAddress = "",
-        remotePort = 0
+        remotePort = 0,
       } = client.socket;
 
       let resolveTrailers: (headers: HeadersInit) => void;
       const trailer = new Promise<HeadersInit>(
-        resolve => (resolveTrailers = resolve)
+        (resolve) => (resolveTrailers = resolve)
       );
 
       http2Stream.removeListener("error", onRequestError);
@@ -471,7 +462,7 @@ function execHttp2(
       http2Stream.once("trailers", onTrailers);
 
       const res = new Http2Response(
-        pump(http2Stream, new PassThrough(), err => {
+        pump(http2Stream, new PassThrough(), (err) => {
           unref(client.socket);
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
@@ -496,8 +487,8 @@ function execHttp2(
             localPort,
             remoteAddress,
             remotePort,
-            encrypted
-          }
+            encrypted,
+          },
         }
       );
 
@@ -560,7 +551,7 @@ export class AbortError extends Error {
 export function transport(options: TransportOptions = {}) {
   const {
     keepAlive = 5000, // Default to keeping a connection open briefly.
-    negotiateHttpVersion = NegotiateHttpVersion.HTTP2_FOR_HTTPS
+    negotiateHttpVersion = NegotiateHttpVersion.HTTP2_FOR_HTTPS,
   } = options;
 
   // TODO: Allow configuration in options.
@@ -568,7 +559,7 @@ export function transport(options: TransportOptions = {}) {
   const netConnections = globalNetConnections;
   const http2Connections = globalHttp2Connections;
 
-  return async function(
+  return async function (
     req: Request,
     next: () => Promise<HttpResponse>
   ): Promise<HttpResponse> {
@@ -590,8 +581,8 @@ export function transport(options: TransportOptions = {}) {
         if (existingSession) return execHttp2(req, url, existingSession);
       }
 
-      return new Promise<HttpResponse>(resolve => {
-        return netConnections.ready(connectionKey, freeSocket => {
+      return new Promise<HttpResponse>((resolve) => {
+        return netConnections.ready(connectionKey, (freeSocket) => {
           const socketOptions: SocketConnectOpts = { host: hostname, port };
           const socket =
             freeSocket ||
@@ -629,8 +620,9 @@ export function transport(options: TransportOptions = {}) {
         options.servername ||
         calculateServerName(hostname, req.headers.get("host"));
       const rejectUnauthorized = options.rejectUnauthorized !== false;
-      const connectionKey = `${hostname}:${port}:${negotiateHttpVersion}:${servername}:${rejectUnauthorized}:${ca ||
-        ""}:${cert || ""}:${key || ""}:${secureProtocol || ""}`;
+      const connectionKey = `${hostname}:${port}:${negotiateHttpVersion}:${servername}:${rejectUnauthorized}:${
+        ca || ""
+      }:${cert || ""}:${key || ""}:${secureProtocol || ""}`;
 
       // Use an existing TLS session to speed up handshake.
       const existingSocket =
@@ -648,7 +640,7 @@ export function transport(options: TransportOptions = {}) {
         key,
         session,
         secureProtocol,
-        secureContext
+        secureContext,
       };
 
       // Use any existing HTTP2 session.
@@ -671,7 +663,7 @@ export function transport(options: TransportOptions = {}) {
           socketOptions.ALPNProtocols = ["h2", "http/1.1"];
         }
 
-        return tlsConnections.ready(connectionKey, freeSocket => {
+        return tlsConnections.ready(connectionKey, (freeSocket) => {
           const socket =
             freeSocket ||
             setupSocket(
@@ -699,8 +691,16 @@ export function transport(options: TransportOptions = {}) {
             return resolve(execHttp2(req, url, client));
           }
 
+          const onClose = () => {
+            socket.removeListener("error", onError);
+            socket.removeListener("connect", onConnect);
+
+            return reject(new ALPNError(req, "TLS connection closed early"));
+          };
+
           const onError = (err: Error) => {
             socket.removeListener("connect", onConnect);
+            socket.removeListener("close", onClose);
 
             return reject(
               new ConnectionError(
@@ -714,11 +714,13 @@ export function transport(options: TransportOptions = {}) {
           // Execute HTTP connection according to negotiated ALPN protocol.
           const onConnect = () => {
             socket.removeListener("error", onError);
+            socket.removeListener("close", onClose);
 
-            const alpnProtocol: string | false = (socket as any).alpnProtocol;
+            // Workaround for https://github.com/nodejs/node/pull/32958/files#r418695485.
+            (socket as any).secureConnecting = false;
 
             // Successfully negotiated HTTP2 connection.
-            if (alpnProtocol === "h2") {
+            if (socket.alpnProtocol === "h2") {
               const existingClient = http2Connections.get(connectionKey);
 
               if (existingClient) {
@@ -738,14 +740,14 @@ export function transport(options: TransportOptions = {}) {
               return resolve(execHttp2(req, url, client));
             }
 
-            if (alpnProtocol === "http/1.1" || alpnProtocol === false) {
+            if (socket.alpnProtocol === "http/1.1" || !socket.alpnProtocol) {
               return resolve(execHttp1(req, url, keepAlive, socket));
             }
 
             return reject(
               new ALPNError(
                 req,
-                `Unknown ALPN protocol negotiated: ${alpnProtocol}`
+                `Unknown ALPN protocol negotiated: ${socket.alpnProtocol}`
               )
             );
           };
@@ -755,6 +757,7 @@ export function transport(options: TransportOptions = {}) {
 
           socket.once("secureConnect", onConnect);
           socket.once("error", onError);
+          socket.once("close", onClose);
         });
       });
     }
@@ -803,13 +806,12 @@ function manageHttp2<T extends Socket | TLSSocket>(
   manager: ConnectionManager<ClientHttp2Session>,
   socket: T
 ) {
-  const connectOptions = { createConnection: () => socket };
-  const client = http2Connect(authority, connectOptions);
+  const client = http2Connect(authority, { createConnection: () => socket });
 
   manager.set(key, client);
-  client.once("error", () => manager.delete(key, client));
-  client.once("goaway", () => manager.delete(key, client));
-  client.once("close", () => manager.delete(key, client));
+  client.once("error", () => manager.delete(key));
+  client.once("goaway", () => manager.delete(key));
+  client.once("close", () => manager.delete(key));
   client.setTimeout(keepAlive, () => client.close());
 
   return client;
