@@ -215,13 +215,17 @@ function pumpBody(
 ) {
   const body = useRawBody(req);
 
-  if (Buffer.isBuffer(body) || typeof body === "string" || body === null) {
-    stream.end(body);
-  } else {
-    pump(body, stream, (err) => {
-      if (err) return onError(err);
-    });
+  if (body instanceof ArrayBuffer) {
+    return stream.end(new Uint8Array(body));
   }
+
+  if (Buffer.isBuffer(body) || typeof body === "string" || body === null) {
+    return stream.end(body);
+  }
+
+  return pump(body, stream, (err) => {
+    if (err) return onError(err);
+  });
 }
 
 // Global connection caches.

@@ -80,6 +80,25 @@ describe("popsicle transport http", () => {
     expect(await res.text()).toEqual("example data");
   });
 
+  it("should send arraybuffer", async () => {
+    const buffer = new ArrayBuffer(3);
+
+    const body = new Uint8Array(buffer);
+    body.set([1, 2, 3]);
+
+    const req = new Request(`${TEST_HTTP_URL}/echo`, {
+      method: "POST",
+      body: buffer,
+    });
+
+    const res = await transport()(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(res.statusText).toEqual("OK");
+    expect(res.headers.get("Content-Type")).toEqual("application/octet-stream");
+    expect(await res.arrayBuffer()).toEqual(buffer);
+  });
+
   it("should send stream data", async () => {
     const req = new Request(`${TEST_HTTP_URL}/echo`, {
       method: "POST",
