@@ -91,7 +91,6 @@
     "typescript": "^3.9.5"
   },
   "dependencies": {
-    "make-error-cause": "^2.2.0",
-    "pump": "^3.0.0"
+    "make-error-cause": "^2.2.0"
   }
 }

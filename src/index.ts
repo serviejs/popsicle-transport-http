@@ -1,4 +1,3 @@
-import pump = require("pump");
 import { URL } from "url";
 import { request as httpRequest, IncomingMessage } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
@@ -21,7 +20,7 @@ import {
   constants as h2constants,
   ClientHttp2Session,
 } from "http2";
-import { PassThrough, Readable, Writable } from "stream";
+import { pipeline, PassThrough, Writable } from "stream";
 import {
   Request,
   Response,
@@ -223,7 +222,7 @@ function pumpBody(
     return stream.end(body);
   }
 
-  return pump(body, stream, (err) => {
+  return pipeline(body, stream, (err) => {
     if (err) return onError(err);
   });
 }
@@ -275,10 +274,10 @@ function execHttp1(
     ref(socket);
 
     const rawRequest = request(arg);
-    const requestStream = new PassThrough();
 
     // Handle abort events correctly.
     const onAbort = () => {
+      req.signal.off("abort", onAbort);
       socket.emit("agentRemove"); // `abort` destroys the connection with no event.
       rawRequest.abort();
     };
@@ -292,8 +291,8 @@ function execHttp1(
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
       unref(socket);
-      req.signal.off("abort", onAbort);
 
+      req.signal.off("abort", onAbort);
       rawRequest.removeListener("response", onResponse);
 
       return reject(
@@ -322,27 +321,35 @@ function execHttp1(
         port: remotePort,
       } = rawResponse.connection.address() as AddressInfo;
 
+      const responseStream = new PassThrough();
       let bytesTransferred = 0;
-      req.signal.emit("responseStarted");
 
       const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
+      // Force `end` to be triggered so the response can still be piped.
+      // Reference: https://github.com/nodejs/node/issues/27981
+      const onAborted = () => rawResponse.push(null);
+
+      req.signal.emit("responseStarted");
       rawResponse.on("data", onData);
+      rawResponse.on("aborted", onAborted);
 
       const res = new HttpResponse(
-        pump(rawResponse, new PassThrough(), (err) => {
+        pipeline(rawResponse, responseStream, (err) => {
           unref(socket);
+
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
 
           rawResponse.removeListener("data", onData);
+          rawResponse.removeListener("aborted", onAborted);
 
           resolveTrailers(rawResponse.trailers);
 
           req.signal.emit("responseEnded");
-        }) as Readable,
+        }),
         {
           status: rawResponse.statusCode,
           statusText: rawResponse.statusMessage,
@@ -364,19 +371,20 @@ function execHttp1(
       return resolve(res);
     };
 
+    const requestStream = new PassThrough();
     let bytesTransferred = 0;
-    req.signal.emit("requestStarted");
 
     const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
     };
 
+    req.signal.emit("requestStarted");
     req.signal.on("abort", onAbort);
     rawRequest.once("error", onRequestError);
     rawRequest.once("response", onResponse);
     requestStream.on("data", onData);
 
-    pump(requestStream, rawRequest, () => {
+    pipeline(requestStream, rawRequest, () => {
       requestStream.removeListener("data", onData);
 
       req.signal.emit("requestEnded");
@@ -425,8 +433,8 @@ function execHttp2(
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
       unref(client.socket);
-      req.signal.off("abort", onAbort);
 
+      req.signal.off("abort", onAbort);
       http2Stream.removeListener("response", onResponse);
 
       return reject(
@@ -466,8 +474,9 @@ function execHttp2(
       http2Stream.once("trailers", onTrailers);
 
       const res = new Http2Response(
-        pump(http2Stream, new PassThrough(), (err) => {
+        pipeline(http2Stream, new PassThrough(), (err) => {
           unref(client.socket);
+
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
 
@@ -477,7 +486,7 @@ function execHttp2(
           resolveTrailers({}); // Resolve in case "trailers" wasn't emitted.
 
           req.signal.emit("responseEnded");
-        }) as Readable,
+        }),
         {
           status: Number(headers[h2constants.HTTP2_HEADER_STATUS]),
           statusText: "",
@@ -513,7 +522,7 @@ function execHttp2(
     http2Stream.once("response", onResponse);
     requestStream.on("data", onData);
 
-    pump(requestStream, http2Stream, () => {
+    pipeline(requestStream, http2Stream, () => {
       requestStream.removeListener("data", onData);
 
       req.signal.emit("requestEnded");
