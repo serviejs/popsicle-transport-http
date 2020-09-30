@@ -322,8 +322,8 @@ function execHttp1(
       } = rawResponse.connection.address() as AddressInfo;
 
       const responseStream = new PassThrough();
-      let bytesTransferred = 0;
 
+      let bytesTransferred = 0;
       const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
@@ -332,22 +332,21 @@ function execHttp1(
       // Reference: https://github.com/nodejs/node/issues/27981
       const onAborted = () => rawResponse.push(null);
 
-      req.signal.emit("responseStarted");
       rawResponse.on("data", onData);
       rawResponse.on("aborted", onAborted);
+      req.signal.emit("responseStarted");
 
       const res = new HttpResponse(
         pipeline(rawResponse, responseStream, (err) => {
           unref(socket);
 
           req.signal.off("abort", onAbort);
-          if (err) req.signal.emit("error", err);
-
           rawResponse.removeListener("data", onData);
           rawResponse.removeListener("aborted", onAborted);
 
           resolveTrailers(rawResponse.trailers);
 
+          if (err) req.signal.emit("error", err);
           req.signal.emit("responseEnded");
         }),
         {
@@ -371,18 +370,18 @@ function execHttp1(
       return resolve(res);
     };
 
-    const requestStream = new PassThrough();
     let bytesTransferred = 0;
-
     const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
     };
 
-    req.signal.emit("requestStarted");
+    const requestStream = new PassThrough();
+
     req.signal.on("abort", onAbort);
     rawRequest.once("error", onRequestError);
     rawRequest.once("response", onResponse);
     requestStream.on("data", onData);
+    req.signal.emit("requestStarted");
 
     pipeline(requestStream, rawRequest, () => {
       requestStream.removeListener("data", onData);
@@ -426,7 +425,6 @@ function execHttp2(
     );
 
     const http2Stream = client.request(headers, { endStream: false });
-    const requestStream = new PassThrough();
 
     ref(client.socket); // Request ref tracking.
 
@@ -459,32 +457,30 @@ function execHttp2(
       http2Stream.removeListener("error", onRequestError);
       http2Stream.removeListener("response", onResponse);
 
-      let bytesTransferred = 0;
-      req.signal.emit("responseStarted");
-
       const onTrailers = (headers: IncomingHttpHeaders) => {
         resolveTrailers(headers);
       };
 
+      let bytesTransferred = 0;
       const onData = (chunk: Buffer) => {
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
       http2Stream.on("data", onData);
       http2Stream.once("trailers", onTrailers);
+      req.signal.emit("responseStarted");
 
       const res = new Http2Response(
         pipeline(http2Stream, new PassThrough(), (err) => {
           unref(client.socket);
 
           req.signal.off("abort", onAbort);
-          if (err) req.signal.emit("error", err);
-
           http2Stream.removeListener("data", onData);
           http2Stream.removeListener("data", onTrailers);
 
           resolveTrailers({}); // Resolve in case "trailers" wasn't emitted.
 
+          if (err) req.signal.emit("error", err);
           req.signal.emit("responseEnded");
         }),
         {
@@ -508,19 +504,21 @@ function execHttp2(
       return resolve(res);
     };
 
-    let bytesTransferred = 0;
-    req.signal.emit("requestStarted");
-
     const onAbort = () => http2Stream.destroy();
 
+    let bytesTransferred = 0;
     const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
     };
+
+    const requestStream = new PassThrough();
 
     req.signal.on("abort", onAbort);
     http2Stream.once("error", onRequestError);
     http2Stream.once("response", onResponse);
     requestStream.on("data", onData);
+
+    req.signal.emit("requestStarted");
 
     pipeline(requestStream, http2Stream, () => {
       requestStream.removeListener("data", onData);
