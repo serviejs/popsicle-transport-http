@@ -290,10 +290,10 @@ function execHttp1(
 
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
+      unref(socket);
+
       req.signal.off("abort", onAbort);
       rawRequest.removeListener("response", onResponse);
-
-      unref(socket);
 
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
@@ -328,7 +328,9 @@ function execHttp1(
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
-      const onAborted = () => responseStream.push(null);
+      // Force `end` to be triggered so the response can still be piped.
+      // Reference: https://github.com/nodejs/node/issues/27981
+      const onAborted = () => rawResponse.push(null);
 
       req.signal.emit("responseStarted");
       rawResponse.on("data", onData);
@@ -337,6 +339,7 @@ function execHttp1(
       const res = new HttpResponse(
         pipeline(rawResponse, responseStream, (err) => {
           unref(socket);
+
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
 
@@ -430,8 +433,8 @@ function execHttp2(
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
       unref(client.socket);
-      req.signal.off("abort", onAbort);
 
+      req.signal.off("abort", onAbort);
       http2Stream.removeListener("response", onResponse);
 
       return reject(
@@ -473,6 +476,7 @@ function execHttp2(
       const res = new Http2Response(
         pipeline(http2Stream, new PassThrough(), (err) => {
           unref(client.socket);
+
           req.signal.off("abort", onAbort);
           if (err) req.signal.emit("error", err);
 
