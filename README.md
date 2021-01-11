@@ -27,14 +27,23 @@ const res = await transport()(req, done);
 The `transport` function sends the Servie `Request` to a remote server.
 
 - `keepAlive?: number` Duration to keep connection alive for re-use (default: `5000`)
-- `negotiateHttpVersion?: NegotiateHttpVersion` Configure HTTP version negotiation (default: `HTTP2_FOR_HTTPS`)
 - `servername?: string` Override remote server name for TLS
 - `rejectUnauthorized?: boolean` Rejects unauthorized TLS connections
+- `negotiateHttpVersion?: NegotiateHttpVersion` Configure HTTP version negotiation (default: `HTTP2_FOR_HTTPS`)
 - `ca?: string | Buffer | Array<string | Buffer>` Set TLS CA
 - `cert?: string | Buffer` Set TLS certificate
 - `key?: string | Buffer` Set TLS key
 - `secureContext?: SecureContext` Set TLS secure context
 - `secureProtocol?: string` Set TLS secure protocol
+- `lookup?: DnsLookup` Enable custom DNS resolution (default: [`cacheable-lookup`](https://github.com/szmarczak/cacheable-lookup))
+- Custom connection managers (default: `Infinity` active sockets):
+  - `tlsSockets?: ConnectionManager<TLSSocket>`
+  - `netSockets?: ConnectionManager<Socket>`
+  - `http2Sessions?: ConnectionManager<ClientHttp2Session>`
+- Custom create connections (all methods support async promises):
+  - `createHttp2Connection?: (authority, socket) => ClientHttp2Session`
+  - `createNetConnection?: (options) => Socket`
+  - `createTlsConnection?: (options) => TLSSocket`
 
 ## TypeScript
 

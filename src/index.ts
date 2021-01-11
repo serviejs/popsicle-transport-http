@@ -638,12 +638,12 @@ export interface TransportOptions {
   keepAlive?: number;
   servername?: string;
   rejectUnauthorized?: boolean;
+  negotiateHttpVersion?: NegotiateHttpVersion;
   ca?: string | Buffer | Array<string | Buffer>;
   cert?: string | Buffer;
   key?: string | Buffer;
   secureContext?: SecureContext;
   secureProtocol?: string;
-  negotiateHttpVersion?: NegotiateHttpVersion;
   tlsSockets?: ConnectionManager<TLSSocket>;
   netSockets?: ConnectionManager<Socket>;
   http2Sessions?: ConnectionManager<ClientHttp2Session>;
