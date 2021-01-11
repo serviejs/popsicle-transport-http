@@ -48,7 +48,7 @@ MIT
 [npm-url]: https://npmjs.org/package/popsicle-transport-http
 [downloads-image]: https://img.shields.io/npm/dm/popsicle-transport-http.svg?style=flat
 [downloads-url]: https://npmjs.org/package/popsicle-transport-http
-[travis-image]: https://img.shields.io/travis/serviejs/popsicle-transport-http.svg?style=flat
-[travis-url]: https://travis-ci.org/serviejs/popsicle-transport-http
+[travis-image]: https://img.shields.io/travis/com/serviejs/popsicle-transport-http.svg?style=flat
+[travis-url]: https://travis-ci.com/github/serviejs/popsicle-transport-http
 [coveralls-image]: https://img.shields.io/coveralls/serviejs/popsicle-transport-http.svg?style=flat
 [coveralls-url]: https://coveralls.io/r/serviejs/popsicle-transport-http?branch=master
