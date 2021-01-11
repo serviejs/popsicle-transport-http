@@ -644,6 +644,7 @@ export interface TransportOptions {
   key?: string | Buffer;
   secureContext?: SecureContext;
   secureProtocol?: string;
+  secureOptions?: number;
   tlsSockets?: ConnectionManager<TLSSocket>;
   netSockets?: ConnectionManager<Socket>;
   http2Sessions?: ConnectionManager<ClientHttp2Session>;
@@ -757,7 +758,14 @@ export function transport(options: TransportOptions = {}) {
 
     // Optionally negotiate HTTP2 connection.
     if (protocol === "https:") {
-      const { ca, cert, key, secureProtocol, secureContext } = options;
+      const {
+        ca,
+        cert,
+        key,
+        secureProtocol,
+        secureContext,
+        secureOptions,
+      } = options;
       const port = Number(url.port) || 443;
       const servername =
         options.servername ||
@@ -808,6 +816,7 @@ export function transport(options: TransportOptions = {}) {
         secureContext,
         ALPNProtocols,
         lookup,
+        secureOptions,
       };
 
       const socket = await tlsSockets.ready(

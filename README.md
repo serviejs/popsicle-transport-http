@@ -30,12 +30,14 @@ The `transport` function sends the Servie `Request` to a remote server.
 - `servername?: string` Override remote server name for TLS
 - `rejectUnauthorized?: boolean` Rejects unauthorized TLS connections
 - `negotiateHttpVersion?: NegotiateHttpVersion` Configure HTTP version negotiation (default: `HTTP2_FOR_HTTPS`)
-- `ca?: string | Buffer | Array<string | Buffer>` Set TLS CA
-- `cert?: string | Buffer` Set TLS certificate
-- `key?: string | Buffer` Set TLS key
-- `secureContext?: SecureContext` Set TLS secure context
-- `secureProtocol?: string` Set TLS secure protocol
 - `lookup?: DnsLookup` Enable custom DNS resolution (default: [`cacheable-lookup`](https://github.com/szmarczak/cacheable-lookup))
+- TLS options:
+  - `ca?: string | Buffer | Array<string | Buffer>` Set TLS CA
+  - `cert?: string | Buffer` Set TLS certificate
+  - `key?: string | Buffer` Set TLS key
+  - `secureContext?: SecureContext` Set TLS secure context
+  - `secureProtocol?: string` Set TLS secure protocol
+  - `secureOptions?: number` Set TLS secure options
 - Custom connection managers (default: `Infinity` active sockets):
   - `tlsSockets?: ConnectionManager<TLSSocket>`
   - `netSockets?: ConnectionManager<Socket>`
