@@ -1,7 +1,8 @@
 import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
+import { connect as http2Connect } from "http2";
 import { Request, AbortController } from "servie/dist/node";
-import { transport } from "./index";
+import { transport, Http2ConnectionManager } from "./index";
 
 const TEST_HTTP_URL = `http://localhost:${process.env.PORT}`;
 const TEST_HTTPS_URL = `https://localhost:${process.env.HTTPS_PORT}`;
@@ -203,5 +204,24 @@ describe("popsicle transport http", () => {
     expect(res.status).toEqual(200);
     expect(res.httpVersion).toEqual("2.0");
     expect(await res.text()).toEqual("Success");
+  });
+
+  it("should re-use connection to http2 server", async () => {
+    const createHttp2Connection = jest.fn((url, socket) => {
+      return http2Connect(url, { createConnection: () => socket });
+    });
+
+    const send = transport({
+      rejectUnauthorized: false,
+      http2Sessions: new Http2ConnectionManager(),
+      createHttp2Connection,
+    });
+
+    const req = new Request(TEST_HTTP2_URL);
+    const [res1, res2] = await Promise.all([send(req, done), send(req, done)]);
+
+    expect(res1.status).toEqual(200);
+    expect(res2.status).toEqual(200);
+    expect(createHttp2Connection).toBeCalledTimes(1);
   });
 });
