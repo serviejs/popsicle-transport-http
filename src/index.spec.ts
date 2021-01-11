@@ -2,7 +2,11 @@ import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
 import { connect as http2Connect } from "http2";
 import { Request, AbortController } from "servie/dist/node";
-import { transport, Http2ConnectionManager } from "./index";
+import {
+  transport,
+  Http2ConnectionManager,
+  SocketConnectionManager,
+} from "./index";
 
 const TEST_HTTP_URL = `http://localhost:${process.env.PORT}`;
 const TEST_HTTPS_URL = `https://localhost:${process.env.HTTPS_PORT}`;
@@ -223,5 +227,60 @@ describe("popsicle transport http", () => {
     expect(res1.status).toEqual(200);
     expect(res2.status).toEqual(200);
     expect(createHttp2Connection).toBeCalledTimes(1);
+  });
+
+  it("should allow custom dns lookup for http requests", async () => {
+    const lookup = jest.fn((hostname, options, callback) =>
+      callback(null, "127.0.0.1", 4)
+    );
+
+    const send = transport({
+      rejectUnauthorized: false,
+      lookup,
+      netSockets: new SocketConnectionManager(),
+    });
+
+    const req = new Request(`${TEST_HTTP_URL}/status/200`);
+    const res = await send(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(lookup).toBeCalledTimes(1);
+  });
+
+  it("should allow custom dns lookup for https requests", async () => {
+    const lookup = jest.fn((hostname, options, callback) =>
+      callback(null, "127.0.0.1", 4)
+    );
+
+    const send = transport({
+      rejectUnauthorized: false,
+      lookup,
+      tlsSockets: new SocketConnectionManager(),
+    });
+
+    const req = new Request(`${TEST_HTTPS_URL}/status/200`);
+    const res = await send(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(lookup).toBeCalledTimes(1);
+  });
+
+  it("should allow custom dns lookup for http2 requests", async () => {
+    const lookup = jest.fn((hostname, options, callback) =>
+      callback(null, "127.0.0.1", 4)
+    );
+
+    const send = transport({
+      rejectUnauthorized: false,
+      lookup,
+      tlsSockets: new SocketConnectionManager(),
+      http2Sessions: new Http2ConnectionManager(),
+    });
+
+    const req = new Request(TEST_HTTP2_URL);
+    const res = await send(req, done);
+
+    expect(res.status).toEqual(200);
+    expect(lookup).toBeCalledTimes(1);
   });
 });
