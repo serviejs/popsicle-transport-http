@@ -354,7 +354,7 @@ function execHttp1(
     const onAbort = () => {
       req.signal.off("abort", onAbort);
       socket.emit("agentRemove"); // `abort` destroys the connection with no event.
-      rawRequest.abort();
+      rawRequest.destroy();
     };
 
     // Reuse HTTP connections where possible.
@@ -403,7 +403,10 @@ function execHttp1(
 
       // Force `end` to be triggered so the response can still be piped.
       // Reference: https://github.com/nodejs/node/issues/27981
-      const onAborted = () => rawResponse.push(null);
+      const onAborted = () => {
+        rawResponse.push(null);
+        responseStream.end();
+      };
 
       rawResponse.on("data", onData);
       rawResponse.on("aborted", onAborted);
