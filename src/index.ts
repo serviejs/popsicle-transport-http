@@ -2,7 +2,6 @@ import { URL } from "url";
 import { request as httpRequest, IncomingMessage } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { BaseError } from "make-error-cause";
-import CacheableLookup from "cacheable-lookup";
 import {
   connect as netConnect,
   Socket,
@@ -22,7 +21,7 @@ import {
   ClientHttp2Session,
 } from "http2";
 import { pipeline, PassThrough, Writable } from "stream";
-import { LookupOptions } from "dns";
+import { lookup as dnsLookup, LookupOptions } from "dns";
 import {
   Request,
   Response,
@@ -278,12 +277,6 @@ export class Http2ConnectionManager
 }
 
 // Global connection caches.
-const cachedLookup = new CacheableLookup();
-const globalLookup = (
-  hostname: string,
-  options: LookupOptions,
-  callback: (err: Error | null, address: string, family: number) => void
-) => cachedLookup.lookup(hostname, options as any, callback);
 const globalNetConnections = new SocketConnectionManager<Socket>();
 const globalTlsConnections = new SocketConnectionManager<TLSSocket>();
 const globalHttp2Connections = new Http2ConnectionManager();
@@ -681,7 +674,7 @@ export function transport(options: TransportOptions = {}) {
   const {
     keepAlive = 5000, // Default to keeping a connection open briefly.
     negotiateHttpVersion = NegotiateHttpVersion.HTTP2_FOR_HTTPS,
-    lookup = globalLookup,
+    lookup = dnsLookup,
     tlsSockets = globalTlsConnections,
     netSockets = globalNetConnections,
     http2Sessions = globalHttp2Connections,

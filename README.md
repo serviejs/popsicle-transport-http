@@ -30,7 +30,7 @@ The `transport` function sends the Servie `Request` to a remote server.
 - `servername?: string` Override remote server name for TLS
 - `rejectUnauthorized?: boolean` Rejects unauthorized TLS connections
 - `negotiateHttpVersion?: NegotiateHttpVersion` Configure HTTP version negotiation (default: `HTTP2_FOR_HTTPS`)
-- `lookup?: DnsLookup` Enable custom DNS resolution (default: [`cacheable-lookup`](https://github.com/szmarczak/cacheable-lookup))
+- `lookup?: DnsLookup` Override default DNS resolution (default: `dns.lookup`)
 - TLS options:
   - `ca?: string | Buffer | Array<string | Buffer>` Set TLS CA
   - `cert?: string | Buffer` Set TLS certificate
