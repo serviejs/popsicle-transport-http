@@ -229,7 +229,7 @@ describe("popsicle transport http", () => {
     expect(createNetConnection).toBeCalledTimes(1);
   });
 
-  it("should re-use socket on free", async () => {
+  it("should re-use net socket on free", async () => {
     const netSockets = new SocketConnectionManager<Socket>(Infinity, 1);
     const createNetConnection = jest.fn(defaultNetConnect);
 

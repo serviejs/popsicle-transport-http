@@ -85,22 +85,26 @@ export class Http2Response extends HttpResponse {
  */
 export interface ConnectionManager<T> {
   /**
-   * Request a "connection" and initialize in `onReady` once available.
+   * Request a connection and initialize in `onReady` once available.
    */
   ready(
     key: string,
-    onReady: (connection: T | undefined) => T | PromiseLike<T>
+    onReady: (connection: T | undefined) => T | Promise<T>
   ): Promise<T>;
+  /**
+   * Create a connection within the `create` callback for tracking.
+   */
+  creating(key: string, create: () => Promise<T>): Promise<T>;
   /**
    * Claims an existing connection as "in-use".
    */
-  claim(key: string, connection: T): void;
+  used(key: string, connection: T): void;
   /**
    * Removes a connection from "in-use" using the connection key and connection.
    * Return `true` when the connection has been deleted from the manager and the
    * connection must be destroyed.
    */
-  release(key: string, connection: T): boolean;
+  freed(key: string, connection: T): boolean;
   /**
    * Gets any connection (or `undefined` when none exist) using the connection key.
    */
@@ -128,8 +132,12 @@ export class SocketSet<T> {
   // Tracks pending requests for a socket.
   pending: Array<(connection: T | undefined) => void> = [];
   // Get number of sockets available + creating.
-  socketSize() {
+  size() {
     return this.creating + this.sockets.size;
+  }
+  // Check if the pool is empty and can be cleaned up.
+  isEmpty() {
+    return this.size() === 0 && this.pending.length === 0;
   }
 }
 
@@ -155,29 +163,31 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
   /**
    * Creates a connection when available.
    */
-  ready(
+  async ready(
     key: string,
-    onReady: (socket: T | undefined) => Promise<T>
+    onReady: (connection: T | undefined) => T | Promise<T>
   ): Promise<T> {
     const pool = this.pool(key);
 
-    // Wrap `onReady` in a temporary socket claim when socket is `null`.
-    const callback = (socket: T | undefined) => {
-      if (socket) return onReady(socket);
-      pool.creating++;
-      return onReady(undefined).finally(() => pool.creating--);
-    };
-
     // Add to "pending" queue when over max connections.
-    if (pool.socketSize() >= this.maxConnections) {
+    if (pool.size() >= this.maxConnections) {
       return new Promise<T | undefined>((resolve) =>
         pool.pending.push(resolve)
-      ).then(callback);
+      ).then(onReady);
     }
 
-    const socket = value(pool.free.values());
-    if (socket) pool.free.delete(socket);
-    return callback(socket);
+    return onReady(this.free(key));
+  }
+
+  async creating(key: string, onCreate: () => Promise<T>): Promise<T> {
+    const pool = this.pool(key);
+    try {
+      pool.creating++;
+      const socket = await onCreate();
+      return socket;
+    } finally {
+      pool.creating--;
+    }
   }
 
   pool(key: string): SocketSet<T> {
@@ -190,14 +200,15 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
     return pool;
   }
 
-  claim(key: string, socket: T): void {
+  used(key: string, socket: T): void {
     socket.ref();
 
     const pool = this.pool(key);
+    pool.free.delete(socket);
     pool.sockets.add(socket);
   }
 
-  release(key: string, socket: T): boolean {
+  freed(key: string, socket: T): boolean {
     const pool = this.pools.get(key);
     if (!pool || !pool.sockets.has(socket)) return false;
 
@@ -208,17 +219,23 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
       return false;
     }
 
+    // Remove reference to freed sockets.
+    socket.unref();
+
     // Save freed connections for reuse.
     if (pool.free.size < this.maxFreeConnections) {
-      socket.unref();
       pool.free.add(socket);
       return false;
     }
 
-    socket.unref();
-    pool.sockets.delete(socket);
-    if (!pool.socketSize()) this.pools.delete(key);
+    this._delete(pool, key, socket);
     return true;
+  }
+
+  _delete(pool: SocketSet<T>, key: string, socket: T) {
+    pool.free.delete(socket);
+    pool.sockets.delete(socket);
+    if (pool.isEmpty()) this.pools.delete(key);
   }
 
   get(key: string): T | undefined {
@@ -235,22 +252,15 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
     const pool = this.pools.get(key);
     if (!pool || !pool.sockets.has(socket)) return;
 
-    // Delete all references to the socket.
-    socket.unref();
-    pool.free.delete(socket);
-    pool.sockets.delete(socket);
+    // Remove the socket from the pool before calling a new `onReady`.
+    this._delete(pool, key, socket);
 
     // Create a new pending socket when an old socket is removed.
     // If a socket was removed we MUST be below `maxConnections`.
     // We also MUST have already used our `free` connections up otherwise we
     // wouldn't have a pending callback.
     const onReady = pool.pending.shift();
-    if (onReady) {
-      onReady(undefined); // No socket to reuse here.
-      return;
-    }
-
-    if (!pool.socketSize()) this.pools.delete(key);
+    if (onReady) onReady(undefined);
   }
 }
 
@@ -262,35 +272,29 @@ export class Http2ConnectionManager
   async ready(
     key: string,
     onReady: (
-      client: ClientHttp2Session | undefined
+      session: ClientHttp2Session | undefined
     ) => ClientHttp2Session | Promise<ClientHttp2Session>
   ): Promise<ClientHttp2Session> {
-    const existingClient = this.sessions.get(key);
-    return onReady(existingClient);
+    return onReady(this.sessions.get(key));
   }
 
-  claim(key: string, session: ClientHttp2Session): void {
-    const count = this.refs.get(session) || 0;
+  async creating(key: string, create: () => Promise<ClientHttp2Session>) {
+    return create();
+  }
 
-    if (count === 0) {
-      session.ref();
-    }
+  used(key: string, session: ClientHttp2Session): void {
+    const count = this.refs.get(session) || 0;
+    if (count === 0) session.ref();
 
     this.refs.set(session, count + 1);
     this.sessions.set(key, session);
   }
 
-  release(key: string, session: ClientHttp2Session): boolean {
+  freed(key: string, session: ClientHttp2Session): boolean {
     const count = this.refs.get(session);
     if (!count) return false;
-
-    if (count === 1) {
-      session.unref();
-      this.refs.delete(session);
-    } else {
-      this.refs.set(session, count - 1);
-    }
-
+    if (count === 1) session.unref();
+    this.refs.set(session, count - 1);
     return false;
   }
 
@@ -304,9 +308,8 @@ export class Http2ConnectionManager
 
   delete(key: string, session: ClientHttp2Session): void {
     if (this.sessions.get(key) === session) {
-      session.unref();
-      this.sessions.delete(key);
       this.refs.delete(session);
+      this.sessions.delete(key);
     }
   }
 }
@@ -543,7 +546,7 @@ function execHttp2(
 
     // Release the HTTP2 connection claim when the stream ends.
     const release = () => {
-      const shouldDestroy = manager.release(key, client);
+      const shouldDestroy = manager.freed(key, client);
       if (shouldDestroy) client.destroy();
     };
 
@@ -642,7 +645,7 @@ function execHttp2(
     });
 
     http2Stream.once("end", release);
-    manager.claim(key, client);
+    manager.used(key, client);
 
     return pumpBody(req, requestStream, reject);
   });
@@ -750,11 +753,10 @@ export function transport(
         }
       }
 
-      const socket = await netSockets.ready(
-        connectionKey,
-        async (existingSocket) => {
-          if (existingSocket) return existingSocket;
+      const socket = await netSockets.ready(connectionKey, (socket) => {
+        if (socket) return socket;
 
+        return netSockets.creating(connectionKey, async () => {
           const socket = await createNetConnection({
             host: hostname,
             port,
@@ -762,25 +764,27 @@ export function transport(
           });
           setupSocket(netSockets, connectionKey, socket, keepAlive);
           return socket;
-        }
-      );
+        });
+      });
 
       // Claim net socket for usage after `ready`.
-      netSockets.claim(connectionKey, socket);
+      netSockets.used(connectionKey, socket);
 
       // Use existing HTTP2 session in HTTP2-only mode.
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
         const client = await http2Sessions.ready(
           connectionKey,
-          async (existingClient) => {
+          (existingClient) => {
             if (existingClient) {
-              netSockets.release(connectionKey, socket);
+              netSockets.freed(connectionKey, socket);
               return existingClient;
             }
 
-            const client = await createHttp2Connection(url, socket);
-            setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
-            return client;
+            return http2Sessions.creating(connectionKey, async () => {
+              const client = await createHttp2Connection(url, socket);
+              setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
+              return client;
+            });
           }
         );
 
@@ -853,19 +857,18 @@ export function transport(
         secureOptions,
       };
 
-      const socket = await tlsSockets.ready(
-        connectionKey,
-        async (existingSocket) => {
-          if (existingSocket) return existingSocket;
+      const socket = await tlsSockets.ready(connectionKey, (socket) => {
+        if (socket) return socket;
 
+        return tlsSockets.creating(connectionKey, async () => {
           const socket = await createTlsConnection(socketOptions);
           setupSocket(tlsSockets, connectionKey, socket, keepAlive);
           return socket;
-        }
-      );
+        });
+      });
 
       // Claim TLS socket after `ready`.
-      tlsSockets.claim(connectionKey, socket);
+      tlsSockets.used(connectionKey, socket);
 
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP1_ONLY) {
         return execHttp1(req, url, keepAlive, socket);
@@ -874,15 +877,17 @@ export function transport(
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
         const client = await http2Sessions.ready(
           connectionKey,
-          async (existingClient) => {
+          (existingClient) => {
             if (existingClient) {
-              tlsSockets.release(connectionKey, socket);
+              tlsSockets.freed(connectionKey, socket);
               return existingClient;
             }
 
-            const client = await createHttp2Connection(url, socket);
-            setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
-            return client;
+            return http2Sessions.creating(connectionKey, async () => {
+              const client = await createHttp2Connection(url, socket);
+              setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
+              return client;
+            });
           }
         );
 
@@ -922,30 +927,26 @@ export function transport(
           if (socket.alpnProtocol === "h2") {
             return resolve(
               http2Sessions
-                .ready(connectionKey, async (existingClient) => {
+                .ready(connectionKey, (existingClient) => {
                   if (existingClient) {
-                    tlsSockets.release(connectionKey, socket);
+                    tlsSockets.freed(connectionKey, socket);
                     return existingClient;
                   }
 
-                  const client = await createHttp2Connection(url, socket);
-                  setupHttp2Client(
-                    http2Sessions,
-                    connectionKey,
-                    client,
-                    keepAlive
-                  );
-                  return client;
+                  return http2Sessions.creating(connectionKey, async () => {
+                    const client = await createHttp2Connection(url, socket);
+                    setupHttp2Client(
+                      http2Sessions,
+                      connectionKey,
+                      client,
+                      keepAlive
+                    );
+                    return client;
+                  });
                 })
-                .then((client) => {
-                  return execHttp2(
-                    http2Sessions,
-                    connectionKey,
-                    client,
-                    req,
-                    url
-                  );
-                })
+                .then((client) =>
+                  execHttp2(http2Sessions, connectionKey, client, req, url)
+                )
             );
           }
 
@@ -986,7 +987,7 @@ function setupSocket<T extends Socket | TLSSocket>(
   keepAlive: number
 ) {
   const onFree = () => {
-    const shouldDestroy = manager.release(key, socket);
+    const shouldDestroy = manager.freed(key, socket);
     if (shouldDestroy) {
       socket.destroy();
     } else if (keepAlive > 0) {
