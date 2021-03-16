@@ -127,6 +127,10 @@ export class SocketSet<T> {
   sockets = new Set<T>();
   // Tracks pending requests for a socket.
   pending: Array<(connection: T | undefined) => void> = [];
+  // Check if the socket set is empty.
+  isEmpty() {
+    return this.creating === 0 && this.sockets.size === 0;
+  }
 }
 
 /**
@@ -194,12 +198,11 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
   }
 
   release(key: string, socket: T): boolean {
-    socket.unref();
+    const pool = this.pools.get(key);
+    if (!pool || !pool.sockets.has(socket)) return false;
 
-    const pool = this.pool(key);
+    // Immediately reuse for a pending connection.
     const onReady = pool.pending.shift();
-
-    // Immediately reuse for pending connection.
     if (onReady) {
       onReady(socket);
       return false;
@@ -207,11 +210,14 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
 
     // Save freed connections for reuse.
     if (pool.free.size < this.maxFreeConnections) {
+      socket.unref();
       pool.free.add(socket);
       return false;
     }
 
-    this.delete(key, socket);
+    socket.unref();
+    pool.sockets.delete(socket);
+    if (pool.isEmpty()) this.pools.delete(key);
     return true;
   }
 
@@ -230,6 +236,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
     if (!pool || !pool.sockets.has(socket)) return;
 
     // Delete all references to the socket.
+    socket.unref();
     pool.free.delete(socket);
     pool.sockets.delete(socket);
 
@@ -243,8 +250,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
       return;
     }
 
-    // Remove pool when there are no sockets to track anymore.
-    if (!pool.creating && !pool.sockets.size) this.pools.delete(key);
+    if (pool.isEmpty()) this.pools.delete(key);
   }
 }
 
@@ -275,7 +281,8 @@ export class Http2ConnectionManager
   }
 
   release(key: string, session: ClientHttp2Session): boolean {
-    const count = this.refs.get(session) || 0;
+    const count = this.refs.get(session);
+    if (!count) return false;
 
     if (count === 1) {
       session.unref();
@@ -296,8 +303,11 @@ export class Http2ConnectionManager
   }
 
   delete(key: string, session: ClientHttp2Session): void {
-    this.refs.delete(session);
-    if (this.sessions.get(key) === session) this.sessions.delete(key);
+    if (this.sessions.get(key) === session) {
+      session.unref();
+      this.sessions.delete(key);
+      this.refs.delete(session);
+    }
   }
 }
 
