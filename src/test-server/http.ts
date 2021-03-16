@@ -38,9 +38,9 @@ export const server = createServer((req, res) => {
 
   if (url.pathname === "/url") {
     res.end(req.url);
+    return;
   }
 
-  res.statusCode = 404;
-  res.end();
+  res.end("Success");
   return;
 });
