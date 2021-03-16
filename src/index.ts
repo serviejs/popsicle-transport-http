@@ -132,11 +132,11 @@ export class SocketSet<T> {
   // Tracks pending requests for a socket.
   pending: Array<(connection: T | undefined) => void> = [];
   // Get number of sockets available + creating.
-  size() {
+  size(): number {
     return this.creating + this.sockets.size;
   }
   // Check if the pool is empty and can be cleaned up.
-  isEmpty() {
+  isEmpty(): boolean {
     return this.size() === 0 && this.pending.length === 0;
   }
 }
@@ -232,7 +232,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
     return true;
   }
 
-  _delete(pool: SocketSet<T>, key: string, socket: T) {
+  private _delete(pool: SocketSet<T>, key: string, socket: T) {
     pool.free.delete(socket);
     pool.sockets.delete(socket);
     if (pool.isEmpty()) this.pools.delete(key);
@@ -278,7 +278,10 @@ export class Http2ConnectionManager
     return onReady(this.sessions.get(key));
   }
 
-  async creating(key: string, create: () => Promise<ClientHttp2Session>) {
+  async creating(
+    key: string,
+    create: () => Promise<ClientHttp2Session>
+  ): Promise<ClientHttp2Session> {
     return create();
   }
 
