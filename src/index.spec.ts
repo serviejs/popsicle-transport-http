@@ -7,14 +7,34 @@ import {
   Http2ConnectionManager,
   SocketConnectionManager,
 } from "./index";
+import { server as httpServer } from "./test-server/http";
+import { server as httpsServer } from "./test-server/https";
+import { server as http2Server } from "./test-server/http2";
+import type { AddressInfo } from "net";
 
-const TEST_HTTP_URL = `http://localhost:${process.env.PORT}`;
-const TEST_HTTPS_URL = `https://localhost:${process.env.HTTPS_PORT}`;
-const TEST_HTTP2_URL = `https://localhost:${process.env.HTTP2_PORT}`;
-
-const ca = readFileSync(join(__dirname, "../scripts/support/ca-crt.pem"));
+const ca = readFileSync(join(__dirname, "./test-server/support/ca-crt.pem"));
 
 describe("popsicle transport http", () => {
+  let TEST_HTTP_URL: string;
+  let TEST_HTTPS_URL: string;
+  let TEST_HTTP2_URL: string;
+
+  beforeAll(() => {
+    const httpAddress = httpServer.listen(0).address() as AddressInfo;
+    const httpsAddress = httpsServer.listen(0).address() as AddressInfo;
+    const http2Address = http2Server.listen(0).address() as AddressInfo;
+
+    TEST_HTTP_URL = `http://localhost:${httpAddress.port}`;
+    TEST_HTTPS_URL = `https://localhost:${httpsAddress.port}`;
+    TEST_HTTP2_URL = `https://localhost:${http2Address.port}`;
+  });
+
+  afterAll(() => {
+    httpServer.close();
+    httpsServer.close();
+    http2Server.close();
+  });
+
   const done = () => {
     throw new TypeError("Invalid request");
   };
