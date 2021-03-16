@@ -268,7 +268,7 @@ describe("popsicle transport http", () => {
     expect(createNetConnection).toBeCalledTimes(2);
   });
 
-  it("should discard socket without keep alive", async () => {
+  it("should create new socket without keep alive", async () => {
     const netSockets = new SocketConnectionManager<Socket>();
     const createNetConnection = jest.fn(defaultNetConnect);
 
@@ -288,6 +288,24 @@ describe("popsicle transport http", () => {
     expect(res2.status).toEqual(200);
     expect(await res2.text()).toEqual("Success");
 
+    expect(createNetConnection).toBeCalledTimes(2);
+  });
+
+  it("should create new socket on free without keep alive", async () => {
+    const netSockets = new SocketConnectionManager<Socket>(Infinity, 1);
+    const createNetConnection = jest.fn(defaultNetConnect);
+
+    const send = transport({
+      keepAlive: -1,
+      netSockets,
+      createNetConnection,
+    });
+
+    const req = new Request(TEST_HTTP_URL);
+    const [res1, res2] = await Promise.all([send(req, done), send(req, done)]);
+
+    expect(res1.status).toEqual(200);
+    expect(res2.status).toEqual(200);
     expect(createNetConnection).toBeCalledTimes(2);
   });
 
