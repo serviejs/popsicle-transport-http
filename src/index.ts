@@ -127,9 +127,9 @@ export class SocketSet<T> {
   sockets = new Set<T>();
   // Tracks pending requests for a socket.
   pending: Array<(connection: T | undefined) => void> = [];
-  // Check if the socket set is empty.
-  isEmpty() {
-    return this.creating === 0 && this.sockets.size === 0;
+  // Get number of sockets available + creating.
+  socketSize() {
+    return this.creating + this.sockets.size;
   }
 }
 
@@ -169,7 +169,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
     };
 
     // Add to "pending" queue when over max connections.
-    if (pool.creating + pool.sockets.size >= this.maxConnections) {
+    if (pool.socketSize() >= this.maxConnections) {
       return new Promise<T | undefined>((resolve) =>
         pool.pending.push(resolve)
       ).then(callback);
@@ -217,7 +217,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
 
     socket.unref();
     pool.sockets.delete(socket);
-    if (pool.isEmpty()) this.pools.delete(key);
+    if (!pool.socketSize()) this.pools.delete(key);
     return true;
   }
 
@@ -250,7 +250,7 @@ export class SocketConnectionManager<T extends Socket | TLSSocket>
       return;
     }
 
-    if (pool.isEmpty()) this.pools.delete(key);
+    if (!pool.socketSize()) this.pools.delete(key);
   }
 }
 
