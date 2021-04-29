@@ -966,7 +966,8 @@ export function transport(
         };
 
         // Existing socket may already have negotiated ALPN protocol.
-        if (typeof socket.alpnProtocol === "string") return onConnect();
+        // Can be `null`, a string, or `false` when no protocol negotiated.
+        if (socket.alpnProtocol != null) return onConnect();
 
         socket.once("secureConnect", onConnect);
         socket.once("error", onError);
