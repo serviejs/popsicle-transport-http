@@ -44,8 +44,8 @@ declare module "servie/dist/signal" {
  * Address information from the HTTP request.
  */
 export interface Connection {
-  localPort: number;
-  localAddress: string;
+  localPort: number | undefined;
+  localAddress: string | undefined;
   remotePort: number;
   remoteAddress: string;
   encrypted: boolean;

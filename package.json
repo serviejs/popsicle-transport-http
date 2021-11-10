@@ -44,9 +44,9 @@
     "make-error-cause": "^2.2.0"
   },
   "devDependencies": {
-    "@borderless/ts-scripts": "^0.2.1",
-    "@types/jest": "^26.0.0",
-    "@types/node": "^14.0.13",
+    "@borderless/ts-scripts": "^0.5.0",
+    "@types/jest": "^27.0.2",
+    "@types/node": "^16.11.7",
     "servie": "^4.3.3",
     "throwback": "^4.1.0",
     "typescript": "^4.2.3"

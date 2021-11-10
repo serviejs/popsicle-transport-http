@@ -10,6 +10,7 @@ import {
   defaultHttp2Connect,
   defaultTlsConnect,
   defaultNetConnect,
+  ConnectionError,
 } from "./index";
 import { server as httpServer } from "./test-server/http";
 import { server as httpsServer } from "./test-server/https";
@@ -163,7 +164,9 @@ describe("popsicle transport http", () => {
     try {
       await transport()(req, done);
     } catch (err) {
-      expect(err.message).toEqual("Request has been aborted");
+      if (err instanceof Error) {
+        expect(err.message).toEqual("Request has been aborted");
+      }
     }
   });
 
@@ -189,7 +192,9 @@ describe("popsicle transport http", () => {
     try {
       await transport()(req, done);
     } catch (err) {
-      expect(err.message).toEqual("Request has been aborted");
+      if (err instanceof Error) {
+        expect(err.message).toEqual("Request has been aborted");
+      }
     }
   });
 
@@ -315,7 +320,9 @@ describe("popsicle transport http", () => {
     try {
       await transport()(new Request(TEST_HTTPS_URL), done);
     } catch (err) {
-      expect(err.code).toEqual("EUNAVAILABLE");
+      if (err instanceof ConnectionError) {
+        expect(err.code).toEqual("EUNAVAILABLE");
+      }
     }
   });
 
