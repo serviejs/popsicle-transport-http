@@ -44,8 +44,8 @@ declare module "servie/dist/signal" {
  * Address information from the HTTP request.
  */
 export interface Connection {
-  localPort: number | undefined;
-  localAddress: string | undefined;
+  localPort: number;
+  localAddress: string;
   remotePort: number;
   remoteAddress: string;
   encrypted: boolean;
@@ -355,6 +355,15 @@ function pumpBody(
 }
 
 /**
+ * Used as a cause for the connection error.
+ */
+export class CausedByEarlyCloseError extends Error {
+  constructor() {
+    super("Connection closed too early");
+  }
+}
+
+/**
  * Expose connection errors.
  */
 export class ConnectionError extends BaseError {
@@ -499,8 +508,9 @@ function execHttp1(
     req.signal.on("abort", onAbort);
     rawRequest.once("error", onRequestError);
     rawRequest.once("response", onResponse);
-    requestStream.on("data", onData);
+
     req.signal.emit("requestStarted");
+    requestStream.on("data", onData);
 
     pipeline(requestStream, rawRequest, () => {
       requestStream.removeListener("data", onData);
@@ -548,9 +558,16 @@ function execHttp2(
     const http2Stream = client.request(headers, { endStream: false });
 
     // Release the HTTP2 connection claim when the stream ends.
-    const release = () => {
+    const onEnd = () => {
       const shouldDestroy = manager.freed(key, client);
       if (shouldDestroy) client.destroy();
+      return reject(
+        new ConnectionError(
+          req,
+          `Connection closed before response from ${url.host}`,
+          new CausedByEarlyCloseError()
+        )
+      );
     };
 
     // Trigger unavailable error when node.js errors before response.
@@ -566,8 +583,8 @@ function execHttp2(
     const onResponse = (headers: IncomingHttpHeaders) => {
       const encrypted = (client.socket as TLSSocket).encrypted === true;
       const {
-        localAddress,
-        localPort,
+        localAddress = "",
+        localPort = 0,
         remoteAddress = "",
         remotePort = 0,
       } = client.socket;
@@ -637,8 +654,10 @@ function execHttp2(
     req.signal.on("abort", onAbort);
     http2Stream.once("error", onRequestError);
     http2Stream.once("response", onResponse);
-    requestStream.on("data", onData);
+    http2Stream.once("end", onEnd);
+    manager.used(key, client);
 
+    requestStream.on("data", onData);
     req.signal.emit("requestStarted");
 
     pipeline(requestStream, http2Stream, () => {
@@ -646,9 +665,6 @@ function execHttp2(
 
       req.signal.emit("requestEnded");
     });
-
-    http2Stream.once("end", release);
-    manager.used(key, client);
 
     return pumpBody(req, requestStream, reject);
   });

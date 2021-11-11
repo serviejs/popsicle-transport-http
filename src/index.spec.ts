@@ -24,22 +24,21 @@ import type { TLSSocket } from "tls";
 const ca = readFileSync(join(__dirname, "./test-server/support/ca-crt.pem"));
 
 describe("popsicle transport http", () => {
-  let TEST_HTTP_URL: string;
-  let TEST_HTTPS_URL: string;
-  let TEST_HTTP2_URL: string;
-  let TEST_HTTP2_TLS_URL: string;
+  const httpAddress = httpServer.listen(0).address() as AddressInfo;
+  const httpsAddress = httpsServer.listen(0).address() as AddressInfo;
+  const http2Address = http2Server.listen(0).address() as AddressInfo;
+  const http2TlsAddress = http2TlsServer.listen(0).address() as AddressInfo;
 
-  beforeAll(() => {
-    const httpAddress = httpServer.listen(0).address() as AddressInfo;
-    const httpsAddress = httpsServer.listen(0).address() as AddressInfo;
-    const http2Address = http2Server.listen(0).address() as AddressInfo;
-    const http2TlsAddress = http2TlsServer.listen(0).address() as AddressInfo;
-
-    TEST_HTTP_URL = `http://localhost:${httpAddress.port}`;
-    TEST_HTTPS_URL = `https://localhost:${httpsAddress.port}`;
-    TEST_HTTP2_URL = `http://localhost:${http2Address.port}`;
-    TEST_HTTP2_TLS_URL = `https://localhost:${http2TlsAddress.port}`;
-  });
+  const TEST_HTTP_URL = `http://localhost:${httpAddress.port}`;
+  const TEST_HTTPS_URL = `https://localhost:${httpsAddress.port}`;
+  const TEST_HTTP2_URL = `http://localhost:${http2Address.port}`;
+  const TEST_HTTP2_TLS_URL = `https://localhost:${http2TlsAddress.port}`;
+  const ALL_URLS = [
+    TEST_HTTP_URL,
+    TEST_HTTPS_URL,
+    TEST_HTTP2_URL,
+    TEST_HTTP2_TLS_URL,
+  ];
 
   afterAll(() => {
     httpServer.close();
@@ -517,4 +516,21 @@ describe("popsicle transport http", () => {
     expect(res.status).toEqual(200);
     expect(lookup).toBeCalledTimes(1);
   });
+
+  for (const url of ALL_URLS) {
+    it(`should handle connection issues to ${url}`, async () => {
+      expect.assertions(1);
+
+      try {
+        await transport({ rejectUnauthorized: false })(
+          new Request(`${url}/close`),
+          done
+        );
+      } catch (err) {
+        if (err instanceof ConnectionError) {
+          expect(err.code).toEqual("EUNAVAILABLE");
+        }
+      }
+    });
+  }
 });

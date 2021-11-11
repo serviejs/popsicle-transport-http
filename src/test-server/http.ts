@@ -41,6 +41,11 @@ export const server = createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === "/close") {
+    res.destroy();
+    return;
+  }
+
   res.end("Success");
   return;
 });
