@@ -595,7 +595,6 @@ function execHttp2(
       );
 
       http2Stream.removeListener("error", onRequestError);
-      http2Stream.removeListener("response", onResponse);
 
       const onTrailers = (headers: IncomingHttpHeaders) => {
         resolveTrailers(headers);
