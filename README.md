@@ -2,8 +2,8 @@
 
 [![NPM version][npm-image]][npm-url]
 [![NPM downloads][downloads-image]][downloads-url]
-[![Build status][travis-image]][travis-url]
-[![Test coverage][coveralls-image]][coveralls-url]
+[![Build status][build-image]][build-url]
+[![Build coverage][coverage-image]][coverage-url]
 
 > Popsicle transport for sending requests over HTTP1 and HTTP2.
 
@@ -59,7 +59,7 @@ MIT
 [npm-url]: https://npmjs.org/package/popsicle-transport-http
 [downloads-image]: https://img.shields.io/npm/dm/popsicle-transport-http.svg?style=flat
 [downloads-url]: https://npmjs.org/package/popsicle-transport-http
-[travis-image]: https://img.shields.io/travis/com/serviejs/popsicle-transport-http.svg?style=flat
-[travis-url]: https://travis-ci.com/github/serviejs/popsicle-transport-http
-[coveralls-image]: https://img.shields.io/coveralls/serviejs/popsicle-transport-http.svg?style=flat
-[coveralls-url]: https://coveralls.io/r/serviejs/popsicle-transport-http?branch=master
+[build-image]: https://img.shields.io/github/workflow/status/serviejs/popsicle-transport-http/CI/main
+[build-url]: https://github.com/serviejs/popsicle-transport-http/actions/workflows/ci.yml?query=branch%3Amain
+[coverage-image]: https://img.shields.io/codecov/c/gh/serviejs/popsicle-transport-http
+[coverage-url]: https://codecov.io/gh/serviejs/popsicle-transport-http
