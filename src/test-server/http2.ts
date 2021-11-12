@@ -25,7 +25,7 @@ const app = (req: Http2ServerRequest, res: Http2ServerResponse) => {
     res.write("hello ");
 
     setTimeout(function () {
-      if (res.destroyed) return;
+      if (req.aborted) return;
 
       res.write("world!");
       res.end();
