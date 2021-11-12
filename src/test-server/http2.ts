@@ -20,6 +20,18 @@ const app = (req: Http2ServerRequest, res: Http2ServerResponse) => {
     return;
   }
 
+  if (url.pathname === "/download") {
+    res.setHeader("Content-Length", 12);
+    res.write("hello ");
+
+    setTimeout(function () {
+      res.write("world!");
+      res.end();
+    }, 200);
+
+    return;
+  }
+
   res.end("Success");
 };
 

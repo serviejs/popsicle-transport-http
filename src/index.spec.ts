@@ -180,6 +180,16 @@ describe("popsicle transport http", () => {
     expect(await res.text()).toEqual("hello ");
   });
 
+  it("should abort mid-request with http2", async () => {
+    const controller = new AbortController();
+    const req = new Request(`${TEST_HTTP2_TLS_URL}/download`, controller);
+    const res = await transport({ rejectUnauthorized: false })(req, done);
+
+    setTimeout(() => controller.abort(), 100);
+
+    expect(await res.text()).toEqual("hello ");
+  });
+
   it("should have no side effects aborting twice", async () => {
     const controller = new AbortController();
     const req = new Request(`${TEST_HTTP_URL}/download`, controller);
