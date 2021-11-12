@@ -1,8 +1,11 @@
-import { createServer } from "http";
+import { createServer, IncomingMessage, ServerResponse } from "http";
 import { createReadStream } from "fs";
 import { URL } from "url";
+import { createServer as createTlsServer } from "https";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-export const server = createServer((req, res) => {
+const app = (req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? "", "http://localhost");
 
   if (url.pathname === "/echo") {
@@ -46,6 +49,21 @@ export const server = createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === "/timeout") {
+    return;
+  }
+
   res.end("Success");
   return;
-});
+};
+
+export const server = createServer(app);
+
+export const tlsServer = createTlsServer(
+  {
+    key: readFileSync(join(__dirname, "support/server-key.pem")),
+    cert: readFileSync(join(__dirname, "support/server-crt.pem")),
+    ca: readFileSync(join(__dirname, "support/ca-crt.pem")),
+  },
+  app
+);

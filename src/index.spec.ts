@@ -1,6 +1,8 @@
 import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
+import type { Socket, AddressInfo } from "net";
+import type { TLSSocket } from "tls";
 import {
   transport,
   Http2ConnectionManager,
@@ -11,15 +13,17 @@ import {
   defaultTlsConnect,
   defaultNetConnect,
   ConnectionError,
+  CausedByTimeoutError,
+  HttpResponse,
 } from "./index";
-import { server as httpServer } from "./test-server/http";
-import { server as httpsServer } from "./test-server/https";
+import {
+  server as httpServer,
+  tlsServer as httpsServer,
+} from "./test-server/http";
 import {
   server as http2Server,
   tlsServer as http2TlsServer,
 } from "./test-server/http2";
-import type { Socket, AddressInfo } from "net";
-import type { TLSSocket } from "tls";
 
 const ca = readFileSync(join(__dirname, "./test-server/support/ca-crt.pem"));
 
@@ -371,8 +375,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Not using TLS");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to http2 server", async () => {
@@ -380,8 +384,8 @@ describe("popsicle transport http", () => {
     const res = await transport({ rejectUnauthorized: false })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Using TLS over HTTP 2.0");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to http2 server using http2 only", async () => {
@@ -392,8 +396,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Using TLS over HTTP 2.0");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to https server using http1 only", async () => {
@@ -404,7 +408,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(await res.text()).toEqual("Using TLS over HTTP 1.1");
+    expect((res as HttpResponse).httpVersion).toEqual("1.1");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should re-use http2 client", async () => {
@@ -522,14 +527,115 @@ describe("popsicle transport http", () => {
       expect.assertions(1);
 
       try {
-        await transport({ rejectUnauthorized: false })(
-          new Request(`${url}/close`),
-          done
-        );
+        await transport({
+          rejectUnauthorized: false,
+          negotiateHttpVersion:
+            url === TEST_HTTP2_URL
+              ? NegotiateHttpVersion.HTTP2_ONLY
+              : undefined,
+        })(new Request(`${url}/close`), done);
       } catch (err) {
         if (err instanceof ConnectionError) {
           expect(err.code).toEqual("EUNAVAILABLE");
         }
+      }
+    });
+
+    it(`should handle request timeouts to ${url}`, async () => {
+      const createNetConnection = jest.fn(defaultNetConnect);
+      const createTlsConnection = jest.fn(defaultTlsConnect);
+      const createHttp2Connection = jest.fn(defaultHttp2Connect);
+
+      const send = transport({
+        idleRequestTimeout: 50,
+        rejectUnauthorized: false,
+        negotiateHttpVersion:
+          url === TEST_HTTP2_URL || url === TEST_HTTP2_TLS_URL
+            ? NegotiateHttpVersion.HTTP2_ONLY
+            : undefined,
+        createNetConnection,
+        createTlsConnection,
+        createHttp2Connection,
+      });
+
+      expect.assertions(4);
+
+      try {
+        await send(new Request(`${url}/timeout`), done);
+      } catch (err) {
+        if (err instanceof ConnectionError) {
+          expect(err.code).toEqual("EUNAVAILABLE");
+          expect(err.cause).toBeInstanceOf(CausedByTimeoutError);
+        }
+      }
+
+      // Test connection re-use from previous step without timeout.
+      const res = await send(new Request(url), done);
+
+      expect(await res.text()).toEqual("Success");
+
+      switch (url) {
+        case TEST_HTTP2_TLS_URL:
+          expect(createTlsConnection).toBeCalledTimes(1);
+          break;
+        case TEST_HTTP2_URL:
+          expect(createNetConnection).toBeCalledTimes(1);
+          break;
+        case TEST_HTTPS_URL:
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP_URL:
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+      }
+    });
+
+    it(`should handle socket timeouts to ${url}`, async () => {
+      const createNetConnection = jest.fn(defaultNetConnect);
+      const createTlsConnection = jest.fn(defaultTlsConnect);
+      const createHttp2Connection = jest.fn(defaultHttp2Connect);
+
+      const send = transport({
+        idleSocketTimeout: 50,
+        rejectUnauthorized: false,
+        negotiateHttpVersion:
+          url === TEST_HTTP2_URL || url === TEST_HTTP2_TLS_URL
+            ? NegotiateHttpVersion.HTTP2_ONLY
+            : undefined,
+        createNetConnection,
+        createTlsConnection,
+        createHttp2Connection,
+      });
+
+      expect.assertions(4);
+
+      try {
+        await send(new Request(`${url}/timeout`), done);
+      } catch (err) {
+        if (err instanceof ConnectionError) {
+          expect(err.code).toEqual("EUNAVAILABLE");
+          expect(err.cause).toBeInstanceOf(CausedByTimeoutError);
+        }
+      }
+
+      // Test connection re-use from previous step without timeout.
+      const res = await send(new Request(url), done);
+
+      expect(await res.text()).toEqual("Success");
+
+      switch (url) {
+        case TEST_HTTP2_TLS_URL:
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP2_URL:
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTPS_URL:
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP_URL:
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
       }
     });
   }

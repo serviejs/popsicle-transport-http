@@ -1,11 +1,29 @@
-import { createServer, createSecureServer } from "http2";
+import {
+  createServer,
+  createSecureServer,
+  Http2ServerRequest,
+  Http2ServerResponse,
+} from "http2";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { URL } from "url";
 
-export const server = createServer((req, res) => {
-  res.end("Not using TLS");
-});
+const app = (req: Http2ServerRequest, res: Http2ServerResponse) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+
+  if (url.pathname === "/close") {
+    res.destroy();
+    return;
+  }
+
+  if (url.pathname === "/timeout") {
+    return;
+  }
+
+  res.end("Success");
+};
+
+export const server = createServer(app);
 
 export const tlsServer = createSecureServer(
   {
@@ -14,15 +32,5 @@ export const tlsServer = createSecureServer(
     ca: readFileSync(join(__dirname, "support/ca-crt.pem")),
     allowHTTP1: true,
   },
-  (req, res) => {
-    const url = new URL(req.url ?? "", "http://localhost");
-
-    if (url.pathname === "/close") {
-      res.destroy();
-      return;
-    }
-
-    res.statusCode = 200;
-    res.end(`Using TLS over HTTP ${req.httpVersion}`);
-  }
+  app
 );

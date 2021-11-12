@@ -1,5 +1,5 @@
 import { URL } from "url";
-import { request as httpRequest, IncomingMessage } from "http";
+import { request as httpRequest, IncomingMessage, request } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { BaseError } from "make-error-cause";
 import {
@@ -317,11 +317,6 @@ export class Http2ConnectionManager
   }
 }
 
-// Global connection caches.
-const globalNetConnections = new SocketConnectionManager<Socket>();
-const globalTlsConnections = new SocketConnectionManager<TLSSocket>();
-const globalHttp2Connections = new Http2ConnectionManager();
-
 export const defaultNetConnect: CreateNetConnection = netConnect;
 export const defaultTlsConnect: CreateTlsConnection = tlsConnect;
 export const defaultHttp2Connect: CreateHttp2Connection = (
@@ -364,6 +359,15 @@ export class CausedByEarlyCloseError extends Error {
 }
 
 /**
+ * Used as a cause for the connection error.
+ */
+export class CausedByTimeoutError extends Error {
+  constructor() {
+    super("Connection timeout");
+  }
+}
+
+/**
  * Expose connection errors.
  */
 export class ConnectionError extends BaseError {
@@ -380,8 +384,8 @@ export class ConnectionError extends BaseError {
 function execHttp1(
   req: Request,
   url: URL,
-  keepAlive: number,
-  socket: Socket | TLSSocket
+  socket: Socket | TLSSocket,
+  config: TransportConfig
 ): Promise<HttpResponse> {
   return new Promise<HttpResponse>((resolve, reject) => {
     const encrypted = url.protocol === "https:";
@@ -404,27 +408,48 @@ function execHttp1(
 
     const rawRequest = request(arg);
 
+    rawRequest.on("timeout", () => {
+      rawRequest.destroy();
+      return reject(
+        new ConnectionError(
+          req,
+          `Connection timed out to ${url.host}`,
+          new CausedByTimeoutError()
+        )
+      );
+    });
+
+    // Timeout when no activity, pick minimum as request is using the entire socket.
+    rawRequest.setTimeout(
+      Math.min(config.idleRequestTimeout, config.idleSocketTimeout)
+    );
+
     // Handle abort events correctly.
     const onAbort = () => {
       req.signal.off("abort", onAbort);
-      socket.emit("agentRemove"); // `abort` destroys the connection with no event.
+      // socket.emit("agentRemove"); // `abort` destroys the connection with no event.
       rawRequest.destroy();
     };
 
     // Reuse HTTP connections where possible.
-    if (keepAlive > 0) {
+    if (config.keepAlive > 0) {
       rawRequest.shouldKeepAlive = true;
       rawRequest.setHeader("Connection", "keep-alive");
     }
 
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
-      req.signal.off("abort", onAbort);
-      rawRequest.removeListener("response", onResponse);
-
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
       );
+    };
+
+    // Clean up lingering request listeners on close.
+    const onClose = () => {
+      req.signal.off("abort", onAbort);
+      rawRequest.removeListener("error", onRequestError);
+      rawRequest.removeListener("response", onResponse);
+      rawRequest.removeListener("close", onClose);
     };
 
     // Track the node.js response.
@@ -508,13 +533,15 @@ function execHttp1(
     req.signal.on("abort", onAbort);
     rawRequest.once("error", onRequestError);
     rawRequest.once("response", onResponse);
+    rawRequest.once("close", onClose);
 
     req.signal.emit("requestStarted");
     requestStream.on("data", onData);
 
-    pipeline(requestStream, rawRequest, () => {
+    pipeline(requestStream, rawRequest, (err) => {
       requestStream.removeListener("data", onData);
 
+      if (err) req.signal.emit("error", err);
       req.signal.emit("requestEnded");
     });
 
@@ -537,11 +564,11 @@ export class ALPNError extends Error {
  * Execute a HTTP2 connection.
  */
 function execHttp2(
-  manager: ConnectionManager<ClientHttp2Session>,
   key: string,
   client: ClientHttp2Session,
   req: Request,
-  url: URL
+  url: URL,
+  config: TransportConfig
 ): Promise<Http2Response> {
   return new Promise<Http2Response>((resolve, reject) => {
     // HTTP2 formatted headers.
@@ -556,25 +583,42 @@ function execHttp2(
     );
 
     const http2Stream = client.request(headers, { endStream: false });
+    let cause = new CausedByEarlyCloseError();
+
+    // Handle socket timeouts more gracefully.
+    const onSocketTimeout = () => {
+      cause = new CausedByTimeoutError();
+    };
+
+    // Timeout after no activity.
+    http2Stream.setTimeout(config.idleRequestTimeout, () => {
+      cause = new CausedByTimeoutError();
+      http2Stream.close(h2constants.NGHTTP2_CANCEL);
+    });
 
     // Release the HTTP2 connection claim when the stream ends.
-    const onEnd = () => {
-      const shouldDestroy = manager.freed(key, client);
+    const onClose = () => {
+      // Clean up all lingering event listeners on final close.
+      req.signal.off("abort", onAbort);
+      http2Stream.removeListener("error", onRequestError);
+      http2Stream.removeListener("response", onResponse);
+      http2Stream.removeListener("close", onClose);
+      client.socket?.removeListener("timeout", onSocketTimeout);
+
+      const shouldDestroy = config.http2Sessions.freed(key, client);
       if (shouldDestroy) client.destroy();
+
       return reject(
         new ConnectionError(
           req,
-          `Connection closed before response from ${url.host}`,
-          new CausedByEarlyCloseError()
+          `Connection closed without response from ${url.host}`,
+          cause
         )
       );
     };
 
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
-      req.signal.off("abort", onAbort);
-      http2Stream.removeListener("response", onResponse);
-
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
       );
@@ -594,8 +638,6 @@ function execHttp2(
         (resolve) => (resolveTrailers = resolve)
       );
 
-      http2Stream.removeListener("error", onRequestError);
-
       const onTrailers = (headers: IncomingHttpHeaders) => {
         resolveTrailers(headers);
       };
@@ -605,12 +647,13 @@ function execHttp2(
         req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
       };
 
+      const responseStream = new PassThrough();
       http2Stream.on("data", onData);
-      http2Stream.once("trailers", onTrailers);
+      http2Stream.on("trailers", onTrailers);
       req.signal.emit("responseStarted");
 
       const res = new Http2Response(
-        pipeline(http2Stream, new PassThrough(), (err) => {
+        pipeline(http2Stream, responseStream, (err) => {
           req.signal.off("abort", onAbort);
           http2Stream.removeListener("data", onData);
           http2Stream.removeListener("trailers", onTrailers);
@@ -643,25 +686,26 @@ function execHttp2(
 
     const onAbort = () => http2Stream.destroy();
 
+    req.signal.on("abort", onAbort);
+    http2Stream.once("error", onRequestError);
+    http2Stream.once("response", onResponse);
+    http2Stream.once("close", onClose);
+    client.socket.once("timeout", onSocketTimeout);
+    config.http2Sessions.used(key, client);
+
     let bytesTransferred = 0;
     const onData = (chunk: Buffer) => {
       req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
     };
 
     const requestStream = new PassThrough();
-
-    req.signal.on("abort", onAbort);
-    http2Stream.once("error", onRequestError);
-    http2Stream.once("response", onResponse);
-    http2Stream.once("end", onEnd);
-    manager.used(key, client);
-
     requestStream.on("data", onData);
     req.signal.emit("requestStarted");
 
-    pipeline(requestStream, http2Stream, () => {
+    pipeline(requestStream, http2Stream, (err) => {
       requestStream.removeListener("data", onData);
 
+      if (err) req.signal.emit("error", err);
       req.signal.emit("requestEnded");
     });
 
@@ -689,11 +733,19 @@ export type CreateHttp2Connection = (
   socket: Socket | TLSSocket
 ) => ClientHttp2Session | Promise<ClientHttp2Session>;
 
+export type LookupFunction = (
+  hostname: string,
+  options: LookupOptions,
+  callback: (err: Error | null, address: string, family: number) => void
+) => void;
+
 /**
  * Node.js HTTP request options.
  */
 export interface TransportOptions {
   keepAlive?: number;
+  idleSocketTimeout?: number;
+  idleRequestTimeout?: number;
   servername?: string;
   rejectUnauthorized?: boolean;
   negotiateHttpVersion?: NegotiateHttpVersion;
@@ -706,11 +758,7 @@ export interface TransportOptions {
   tlsSockets?: ConnectionManager<TLSSocket>;
   netSockets?: ConnectionManager<Socket>;
   http2Sessions?: ConnectionManager<ClientHttp2Session>;
-  lookup?: (
-    hostname: string,
-    options: LookupOptions,
-    callback: (err: Error | null, address: string, family: number) => void
-  ) => void;
+  lookup?: LookupFunction;
   createHttp2Connection?: CreateHttp2Connection;
   createNetConnection?: CreateNetConnection;
   createTlsConnection?: CreateTlsConnection;
@@ -727,22 +775,56 @@ export class AbortError extends Error {
   }
 }
 
+const DEFAULT_KEEP_ALIVE = 5_000; // 5 seconds.
+const DEFAULT_IDLE_REQUEST_TIMEOUT = 30_000; // 30 seconds.
+const DEFAULT_IDLE_SOCKET_TIMEOUT = 300_000; // 5 minutes.
+
+/**
+ * Shared configuration options during request execution.
+ */
+interface TransportConfig {
+  keepAlive: number;
+  idleSocketTimeout: number;
+  idleRequestTimeout: number;
+  tlsSockets: ConnectionManager<TLSSocket>;
+  netSockets: ConnectionManager<Socket>;
+  http2Sessions: ConnectionManager<ClientHttp2Session>;
+}
+
+function optionsToConfig(options: TransportOptions): TransportConfig {
+  const {
+    keepAlive = DEFAULT_KEEP_ALIVE,
+    idleSocketTimeout = DEFAULT_IDLE_SOCKET_TIMEOUT,
+    idleRequestTimeout = DEFAULT_IDLE_REQUEST_TIMEOUT,
+    tlsSockets = new SocketConnectionManager<TLSSocket>(),
+    netSockets = new SocketConnectionManager<Socket>(),
+    http2Sessions = new Http2ConnectionManager(),
+  } = options;
+
+  return {
+    keepAlive,
+    idleSocketTimeout,
+    idleRequestTimeout,
+    tlsSockets,
+    netSockets,
+    http2Sessions,
+  };
+}
+
 /**
  * Forward request over HTTP1/1 or HTTP2, with TLS support.
  */
 export function transport(
   options: TransportOptions = {}
 ): (req: Request, next: () => Promise<Response>) => Promise<Response> {
+  const config = optionsToConfig(options);
+  const { netSockets, tlsSockets, http2Sessions } = config;
   const {
-    keepAlive = 5000, // Default to keeping a connection open briefly.
-    negotiateHttpVersion = NegotiateHttpVersion.HTTP2_FOR_HTTPS,
     lookup = dnsLookup,
-    tlsSockets = globalTlsConnections,
-    netSockets = globalNetConnections,
-    http2Sessions = globalHttp2Connections,
     createNetConnection = defaultNetConnect,
     createTlsConnection = defaultTlsConnect,
     createHttp2Connection = defaultHttp2Connect,
+    negotiateHttpVersion = NegotiateHttpVersion.HTTP2_FOR_HTTPS,
   } = options;
 
   return async (req, next) => {
@@ -761,13 +843,7 @@ export function transport(
         const existingClient = http2Sessions.free(connectionKey);
 
         if (existingClient) {
-          return execHttp2(
-            http2Sessions,
-            connectionKey,
-            existingClient,
-            req,
-            url
-          );
+          return execHttp2(connectionKey, existingClient, req, url, config);
         }
       }
 
@@ -780,7 +856,7 @@ export function transport(
             port,
             lookup,
           });
-          setupSocket(netSockets, connectionKey, socket, keepAlive);
+          setupSocket(netSockets, connectionKey, socket, config);
           return socket;
         });
       });
@@ -800,16 +876,16 @@ export function transport(
 
             return http2Sessions.creating(connectionKey, async () => {
               const client = await createHttp2Connection(url, socket);
-              setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
+              setupHttp2Client(connectionKey, client, config);
               return client;
             });
           }
         );
 
-        return execHttp2(http2Sessions, connectionKey, client, req, url);
+        return execHttp2(connectionKey, client, req, url, config);
       }
 
-      return execHttp1(req, url, keepAlive, socket);
+      return execHttp1(req, url, socket, config);
     }
 
     // Optionally negotiate HTTP2 connection.
@@ -839,13 +915,7 @@ export function transport(
         const existingSession = http2Sessions.free(connectionKey);
 
         if (existingSession) {
-          return execHttp2(
-            http2Sessions,
-            connectionKey,
-            existingSession,
-            req,
-            url
-          );
+          return execHttp2(connectionKey, existingSession, req, url, config);
         }
       }
 
@@ -880,7 +950,7 @@ export function transport(
 
         return tlsSockets.creating(connectionKey, async () => {
           const socket = await createTlsConnection(socketOptions);
-          setupSocket(tlsSockets, connectionKey, socket, keepAlive);
+          setupSocket(tlsSockets, connectionKey, socket, config);
           return socket;
         });
       });
@@ -889,7 +959,7 @@ export function transport(
       tlsSockets.used(connectionKey, socket);
 
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP1_ONLY) {
-        return execHttp1(req, url, keepAlive, socket);
+        return execHttp1(req, url, socket, config);
       }
 
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
@@ -903,13 +973,13 @@ export function transport(
 
             return http2Sessions.creating(connectionKey, async () => {
               const client = await createHttp2Connection(url, socket);
-              setupHttp2Client(http2Sessions, connectionKey, client, keepAlive);
+              setupHttp2Client(connectionKey, client, config);
               return client;
             });
           }
         );
 
-        return execHttp2(http2Sessions, connectionKey, client, req, url);
+        return execHttp2(connectionKey, client, req, url, config);
       }
 
       return new Promise<HttpResponse | Http2Response>((resolve, reject) => {
@@ -953,23 +1023,18 @@ export function transport(
 
                   return http2Sessions.creating(connectionKey, async () => {
                     const client = await createHttp2Connection(url, socket);
-                    setupHttp2Client(
-                      http2Sessions,
-                      connectionKey,
-                      client,
-                      keepAlive
-                    );
+                    setupHttp2Client(connectionKey, client, config);
                     return client;
                   });
                 })
                 .then((client) =>
-                  execHttp2(http2Sessions, connectionKey, client, req, url)
+                  execHttp2(connectionKey, client, req, url, config)
                 )
             );
           }
 
           if (socket.alpnProtocol === "http/1.1" || !socket.alpnProtocol) {
-            return resolve(execHttp1(req, url, keepAlive, socket));
+            return resolve(execHttp1(req, url, socket, config));
           }
 
           return reject(
@@ -1003,50 +1068,56 @@ function setupSocket<T extends Socket | TLSSocket>(
   manager: ConnectionManager<T>,
   key: string,
   socket: T,
-  keepAlive: number
+  config: TransportConfig
 ) {
   const onFree = () => {
     const shouldDestroy = manager.freed(key, socket);
-    if (shouldDestroy) {
-      socket.destroy();
-    } else if (keepAlive > 0) {
-      socket.setKeepAlive(true, keepAlive);
-    }
+    if (shouldDestroy) socket.destroy();
+
+    // Reset any timeout added by HTTP requests.
+    if (config.idleSocketTimeout > 0)
+      socket.setTimeout(config.idleSocketTimeout);
   };
 
   const cleanup = () => {
     socket.removeListener("free", onFree);
     socket.removeListener("close", cleanup);
     socket.removeListener("agentRemove", cleanup);
+    socket.removeListener("timeout", onTimeout);
     manager.delete(key, socket);
+  };
+
+  const onTimeout = () => {
+    socket.destroy();
   };
 
   socket.on("free", onFree);
   socket.on("close", cleanup);
   socket.on("agentRemove", cleanup);
+  socket.on("timeout", onTimeout);
+
+  if (config.keepAlive > 0) socket.setKeepAlive(true, config.keepAlive);
+  if (config.idleSocketTimeout > 0) socket.setTimeout(config.idleSocketTimeout);
 }
 
 /**
  * Set up a HTTP2 working session.
  */
 function setupHttp2Client(
-  manager: ConnectionManager<ClientHttp2Session>,
   key: string,
   client: ClientHttp2Session,
-  keepAlive: number
+  config: TransportConfig
 ) {
   const cleanup = () => {
     client.removeListener("error", cleanup);
     client.removeListener("goaway", cleanup);
     client.removeListener("close", cleanup);
-    manager.delete(key, client);
+    config.http2Sessions.delete(key, client);
   };
 
   client.once("error", cleanup);
   client.once("goaway", cleanup);
   client.once("close", cleanup);
-
-  if (keepAlive > 0) client.setTimeout(keepAlive, () => client.close());
 }
 
 /**
