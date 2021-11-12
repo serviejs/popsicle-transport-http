@@ -443,6 +443,7 @@ function execHttp1(
 
     rawRequest.on("timeout", () => {
       rawRequest.destroy();
+
       return reject(
         new ConnectionError(
           req,
@@ -458,12 +459,6 @@ function execHttp1(
         ? Math.min(config.idleRequestTimeout, config.idleSocketTimeout)
         : config.idleRequestTimeout
     );
-
-    // Handle abort events correctly.
-    const onAbort = () => {
-      req.signal.off("abort", onAbort);
-      rawRequest.destroy();
-    };
 
     // Reuse HTTP connections where possible.
     if (config.keepAlive > 0) {
@@ -534,6 +529,8 @@ function execHttp1(
 
       return resolve(res);
     };
+
+    const onAbort = () => rawRequest.destroy();
 
     // Clean up lingering request listeners on close.
     const onClose = () => {
@@ -654,6 +651,8 @@ function execHttp2(
       return resolve(res);
     };
 
+    const onAbort = () => http2Stream.destroy();
+
     // Release the HTTP2 connection claim when the stream ends.
     const onClose = () => {
       // Clean up all lingering event listeners on final close.
@@ -675,8 +674,6 @@ function execHttp2(
         )
       );
     };
-
-    const onAbort = () => http2Stream.destroy();
 
     req.signal.on("abort", onAbort);
     http2Stream.once("error", onRequestError);
