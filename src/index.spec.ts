@@ -2,10 +2,8 @@ import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
 import type { Socket, AddressInfo } from "net";
-import type { TLSSocket } from "tls";
 import {
   transport,
-  Http2ConnectionManager,
   SocketConnectionManager,
   NegotiateHttpVersion,
   defaultHttp2Connect,
@@ -215,12 +213,10 @@ describe("popsicle transport http", () => {
   });
 
   it("should re-use net socket", async () => {
-    const netSockets = new SocketConnectionManager<Socket>();
     const createNetConnection = jest.fn(defaultNetConnect);
 
     const send = transport({
       createNetConnection,
-      netSockets,
     });
 
     const req = new Request(TEST_HTTP_URL);
@@ -276,13 +272,11 @@ describe("popsicle transport http", () => {
   });
 
   it("should create new socket without keep alive", async () => {
-    const netSockets = new SocketConnectionManager<Socket>();
     const createNetConnection = jest.fn(defaultNetConnect);
 
     const send = transport({
       keepAlive: -1,
       createNetConnection,
-      netSockets,
     });
 
     const req = new Request(TEST_HTTP_URL);
@@ -345,13 +339,11 @@ describe("popsicle transport http", () => {
   });
 
   it("should re-use tls socket", async () => {
-    const tlsSockets = new SocketConnectionManager<TLSSocket>();
     const createTlsConnection = jest.fn(defaultTlsConnect);
 
     const send = transport({
       rejectUnauthorized: false,
       createTlsConnection,
-      tlsSockets,
     });
 
     const req = new Request(TEST_HTTPS_URL);
@@ -416,7 +408,6 @@ describe("popsicle transport http", () => {
 
     const send = transport({
       rejectUnauthorized: false,
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
     });
 
@@ -434,7 +425,6 @@ describe("popsicle transport http", () => {
     const createHttp2Connection = jest.fn(defaultHttp2Connect);
 
     const send = transport({
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
       negotiateHttpVersion: NegotiateHttpVersion.HTTP2_ONLY,
     });
@@ -454,7 +444,6 @@ describe("popsicle transport http", () => {
 
     const send = transport({
       rejectUnauthorized: false,
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
     });
 
@@ -474,7 +463,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      netSockets: new SocketConnectionManager(),
     });
 
     const req = new Request(`${TEST_HTTP_URL}/status/200`);
@@ -492,7 +480,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      tlsSockets: new SocketConnectionManager(),
     });
 
     const req = new Request(`${TEST_HTTPS_URL}/status/200`);
@@ -510,8 +497,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      tlsSockets: new SocketConnectionManager(),
-      http2Sessions: new Http2ConnectionManager(),
     });
 
     const req = new Request(TEST_HTTP2_TLS_URL);
