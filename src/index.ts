@@ -20,7 +20,7 @@ import {
   constants as h2constants,
   ClientHttp2Session,
 } from "http2";
-import { pipeline, PassThrough, Writable } from "stream";
+import { pipeline, PassThrough, Writable, Readable } from "stream";
 import { lookup as dnsLookup, LookupOptions } from "dns";
 import {
   Request,
@@ -326,26 +326,59 @@ export const defaultHttp2Connect: CreateHttp2Connection = (
   return http2Connect(authority, { createConnection: () => socket });
 };
 
-/**
- * Write Servie body to node.js stream.
- */
-function pumpBody(
+function pipelineRequest(
   req: Request,
   stream: Writable,
   onError: (err: Error) => void
-) {
+): void {
+  let bytesTransferred = 0;
+  const onData = (chunk: Buffer) => {
+    req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
+  };
+
+  const requestStream = new PassThrough();
+  requestStream.on("data", onData);
+  req.signal.emit("requestStarted");
+
+  pipeline(requestStream, stream, (err) => {
+    requestStream.removeListener("data", onData);
+
+    if (err) req.signal.emit("error", err);
+    req.signal.emit("requestEnded");
+  });
+
   const body = useRawBody(req);
 
   if (body instanceof ArrayBuffer) {
-    return stream.end(new Uint8Array(body));
+    return requestStream.end(new Uint8Array(body));
   }
 
   if (Buffer.isBuffer(body) || typeof body === "string" || body === null) {
-    return stream.end(body);
+    return requestStream.end(body);
   }
 
-  return pipeline(body, stream, (err) => {
+  pipeline(body, requestStream, (err) => {
     if (err) return onError(err);
+  });
+}
+
+function pipelineResponse(req: Request, stream: Readable, onEnd: () => void) {
+  let bytesTransferred = 0;
+  const onData = (chunk: Buffer) => {
+    req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
+  };
+
+  const responseStream = new PassThrough();
+  stream.on("data", onData);
+  req.signal.emit("responseStarted");
+
+  return pipeline(stream, responseStream, (err) => {
+    stream.removeListener("data", onData);
+
+    onEnd();
+
+    if (err) req.signal.emit("error", err);
+    req.signal.emit("responseEnded");
   });
 }
 
@@ -421,7 +454,9 @@ function execHttp1(
 
     // Timeout when no activity, pick minimum as request is using the entire socket.
     rawRequest.setTimeout(
-      Math.min(config.idleRequestTimeout, config.idleSocketTimeout)
+      config.idleSocketTimeout > 0
+        ? Math.min(config.idleRequestTimeout, config.idleSocketTimeout)
+        : config.idleRequestTimeout
     );
 
     // Handle abort events correctly.
@@ -441,14 +476,6 @@ function execHttp1(
       return reject(
         new ConnectionError(req, `Unable to connect to ${url.host}`, err)
       );
-    };
-
-    // Clean up lingering request listeners on close.
-    const onClose = () => {
-      req.signal.off("abort", onAbort);
-      rawRequest.removeListener("error", onRequestError);
-      rawRequest.removeListener("response", onResponse);
-      rawRequest.removeListener("close", onClose);
     };
 
     // Track the node.js response.
@@ -472,34 +499,20 @@ function execHttp1(
         port: remotePort,
       } = rawResponse.socket.address() as AddressInfo;
 
-      const responseStream = new PassThrough();
-
-      let bytesTransferred = 0;
-      const onData = (chunk: Buffer) => {
-        req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
-      };
-
       // Force `end` to be triggered so the response can still be piped.
       // Reference: https://github.com/nodejs/node/issues/27981
       const onAborted = () => {
         rawResponse.push(null);
-        responseStream.end();
       };
 
-      rawResponse.on("data", onData);
       rawResponse.on("aborted", onAborted);
-      req.signal.emit("responseStarted");
 
       const res = new HttpResponse(
-        pipeline(rawResponse, responseStream, (err) => {
+        pipelineResponse(req, rawResponse, () => {
           req.signal.off("abort", onAbort);
-          rawResponse.removeListener("data", onData);
           rawResponse.removeListener("aborted", onAborted);
 
           resolveTrailers(rawResponse.trailers);
-
-          if (err) req.signal.emit("error", err);
-          req.signal.emit("responseEnded");
         }),
         {
           status: rawResponse.statusCode,
@@ -522,29 +535,20 @@ function execHttp1(
       return resolve(res);
     };
 
-    let bytesTransferred = 0;
-    const onData = (chunk: Buffer) => {
-      req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
+    // Clean up lingering request listeners on close.
+    const onClose = () => {
+      req.signal.off("abort", onAbort);
+      rawRequest.removeListener("error", onRequestError);
+      rawRequest.removeListener("response", onResponse);
+      rawRequest.removeListener("close", onClose);
     };
-
-    const requestStream = new PassThrough();
 
     req.signal.on("abort", onAbort);
     rawRequest.once("error", onRequestError);
     rawRequest.once("response", onResponse);
     rawRequest.once("close", onClose);
 
-    req.signal.emit("requestStarted");
-    requestStream.on("data", onData);
-
-    pipeline(requestStream, rawRequest, (err) => {
-      requestStream.removeListener("data", onData);
-
-      if (err) req.signal.emit("error", err);
-      req.signal.emit("requestEnded");
-    });
-
-    return pumpBody(req, requestStream, reject);
+    return pipelineRequest(req, rawRequest, reject);
   });
 }
 
@@ -595,27 +599,6 @@ function execHttp2(
       http2Stream.close(h2constants.NGHTTP2_CANCEL);
     });
 
-    // Release the HTTP2 connection claim when the stream ends.
-    const onClose = () => {
-      // Clean up all lingering event listeners on final close.
-      req.signal.off("abort", onAbort);
-      http2Stream.removeListener("error", onRequestError);
-      http2Stream.removeListener("response", onResponse);
-      http2Stream.removeListener("close", onClose);
-      client.socket?.removeListener("timeout", onSocketTimeout);
-
-      const shouldDestroy = config.http2Sessions.freed(key, client);
-      if (shouldDestroy) client.destroy();
-
-      return reject(
-        new ConnectionError(
-          req,
-          `Connection closed without response from ${url.host}`,
-          cause
-        )
-      );
-    };
-
     // Trigger unavailable error when node.js errors before response.
     const onRequestError = (err: Error) => {
       return reject(
@@ -641,26 +624,14 @@ function execHttp2(
         resolveTrailers(headers);
       };
 
-      let bytesTransferred = 0;
-      const onData = (chunk: Buffer) => {
-        req.signal.emit("responseBytes", (bytesTransferred += chunk.length));
-      };
-
-      const responseStream = new PassThrough();
-      http2Stream.on("data", onData);
-      http2Stream.on("trailers", onTrailers);
-      req.signal.emit("responseStarted");
+      http2Stream.once("trailers", onTrailers);
 
       const res = new Http2Response(
-        pipeline(http2Stream, responseStream, (err) => {
+        pipelineResponse(req, http2Stream, () => {
           req.signal.off("abort", onAbort);
-          http2Stream.removeListener("data", onData);
           http2Stream.removeListener("trailers", onTrailers);
 
           resolveTrailers({}); // Resolve in case "trailers" wasn't emitted.
-
-          if (err) req.signal.emit("error", err);
-          req.signal.emit("responseEnded");
         }),
         {
           status: Number(headers[h2constants.HTTP2_HEADER_STATUS]),
@@ -683,6 +654,28 @@ function execHttp2(
       return resolve(res);
     };
 
+    // Release the HTTP2 connection claim when the stream ends.
+    const onClose = () => {
+      // Clean up all lingering event listeners on final close.
+      req.signal.off("abort", onAbort);
+      http2Stream.removeListener("error", onRequestError);
+      http2Stream.removeListener("response", onResponse);
+      http2Stream.removeListener("close", onClose);
+      client.socket?.removeListener("timeout", onSocketTimeout);
+
+      const shouldDestroy = config.http2Sessions.freed(key, client);
+      if (shouldDestroy) client.destroy();
+
+      // Handle when the server closes the stream without responding.
+      return reject(
+        new ConnectionError(
+          req,
+          `Connection closed without response from ${url.host}`,
+          cause
+        )
+      );
+    };
+
     const onAbort = () => http2Stream.destroy();
 
     req.signal.on("abort", onAbort);
@@ -692,23 +685,7 @@ function execHttp2(
     client.socket.once("timeout", onSocketTimeout);
     config.http2Sessions.used(key, client);
 
-    let bytesTransferred = 0;
-    const onData = (chunk: Buffer) => {
-      req.signal.emit("requestBytes", (bytesTransferred += chunk.length));
-    };
-
-    const requestStream = new PassThrough();
-    requestStream.on("data", onData);
-    req.signal.emit("requestStarted");
-
-    pipeline(requestStream, http2Stream, (err) => {
-      requestStream.removeListener("data", onData);
-
-      if (err) req.signal.emit("error", err);
-      req.signal.emit("requestEnded");
-    });
-
-    return pumpBody(req, requestStream, reject);
+    return pipelineRequest(req, http2Stream, reject);
   });
 }
 
@@ -1074,13 +1051,13 @@ function setupSocket<T extends Socket | TLSSocket>(
     if (shouldDestroy) socket.destroy();
 
     // Reset any timeout added by HTTP requests.
-    if (config.idleSocketTimeout > 0)
+    if (config.idleSocketTimeout > 0) {
       socket.setTimeout(config.idleSocketTimeout);
+    }
   };
 
-  const cleanup = () => {
+  const onClose = () => {
     socket.removeListener("free", onFree);
-    socket.removeListener("close", cleanup);
     socket.removeListener("timeout", onTimeout);
     manager.delete(key, socket);
   };
@@ -1090,8 +1067,8 @@ function setupSocket<T extends Socket | TLSSocket>(
   };
 
   socket.on("free", onFree);
-  socket.on("close", cleanup);
-  socket.on("timeout", onTimeout);
+  socket.once("close", onClose);
+  socket.once("timeout", onTimeout);
 
   if (config.keepAlive > 0) socket.setKeepAlive(true, config.keepAlive);
   if (config.idleSocketTimeout > 0) socket.setTimeout(config.idleSocketTimeout);
