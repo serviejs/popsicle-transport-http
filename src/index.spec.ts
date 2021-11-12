@@ -542,7 +542,7 @@ describe("popsicle transport http", () => {
         createHttp2Connection,
       });
 
-      expect.assertions(4);
+      expect.assertions(5);
 
       try {
         await send(new Request(`${url}/timeout`), done);
@@ -560,15 +560,19 @@ describe("popsicle transport http", () => {
 
       switch (url) {
         case TEST_HTTP2_TLS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
           expect(createTlsConnection).toBeCalledTimes(1);
           break;
         case TEST_HTTP2_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
           expect(createNetConnection).toBeCalledTimes(1);
           break;
         case TEST_HTTPS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
           expect(createTlsConnection).toBeCalledTimes(2);
           break;
         case TEST_HTTP_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
           expect(createNetConnection).toBeCalledTimes(2);
           break;
       }
@@ -591,7 +595,7 @@ describe("popsicle transport http", () => {
         createHttp2Connection,
       });
 
-      expect.assertions(4);
+      expect.assertions(5);
 
       try {
         await send(new Request(`${url}/timeout`), done);
@@ -609,15 +613,19 @@ describe("popsicle transport http", () => {
 
       switch (url) {
         case TEST_HTTP2_TLS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
           expect(createTlsConnection).toBeCalledTimes(2);
           break;
         case TEST_HTTP2_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
           expect(createNetConnection).toBeCalledTimes(2);
           break;
         case TEST_HTTPS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
           expect(createTlsConnection).toBeCalledTimes(2);
           break;
         case TEST_HTTP_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
           expect(createNetConnection).toBeCalledTimes(2);
           break;
       }
