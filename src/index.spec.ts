@@ -173,21 +173,31 @@ describe("popsicle transport http", () => {
   it("should abort mid-request", async () => {
     const controller = new AbortController();
     const req = new Request(`${TEST_HTTP_URL}/download`, controller);
+
+    const spy = jest.fn();
+    req.signal.on("responseBytes", spy);
+
     const res = await transport()(req, done);
 
     setTimeout(() => controller.abort(), 100);
 
     expect(await res.text()).toEqual("hello ");
+    expect(spy).toBeCalledWith(6);
   });
 
   it("should abort mid-request with http2", async () => {
     const controller = new AbortController();
     const req = new Request(`${TEST_HTTP2_TLS_URL}/download`, controller);
+
+    const spy = jest.fn();
+    req.signal.on("responseBytes", spy);
+
     const res = await transport({ rejectUnauthorized: false })(req, done);
 
     setTimeout(() => controller.abort(), 100);
 
     expect(await res.text()).toEqual("hello ");
+    expect(spy).toBeCalledWith(6);
   });
 
   it("should have no side effects aborting twice", async () => {
@@ -210,15 +220,12 @@ describe("popsicle transport http", () => {
 
   it("should emit download progress", async () => {
     const req = new Request(`${TEST_HTTP_URL}/download`);
+
     const spy = jest.fn();
-
-    const res = await transport()(req, done);
-
     req.signal.on("responseBytes", spy);
 
+    const res = await transport()(req, done);
     expect(await res.text()).toEqual("hello world!");
-
-    // Check spy after body has loaded.
     expect(spy).toBeCalledWith(12);
   });
 
