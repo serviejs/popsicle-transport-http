@@ -530,7 +530,9 @@ function execHttp1(
       return resolve(res);
     };
 
-    const onAbort = () => rawRequest.destroy();
+    const onAbort = () => {
+      rawRequest.destroy();
+    };
 
     // Clean up lingering request listeners on close.
     const onClose = () => {
@@ -651,7 +653,9 @@ function execHttp2(
       return resolve(res);
     };
 
-    const onAbort = () => http2Stream.destroy();
+    const onAbort = () => {
+      http2Stream.destroy();
+    };
 
     // Release the HTTP2 connection claim when the stream ends.
     const onClose = () => {
