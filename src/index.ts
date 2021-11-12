@@ -1,5 +1,5 @@
 import { URL } from "url";
-import { request as httpRequest, IncomingMessage, request } from "http";
+import { request as httpRequest, IncomingMessage } from "http";
 import { request as httpsRequest, RequestOptions } from "https";
 import { BaseError } from "make-error-cause";
 import {
@@ -427,7 +427,6 @@ function execHttp1(
     // Handle abort events correctly.
     const onAbort = () => {
       req.signal.off("abort", onAbort);
-      // socket.emit("agentRemove"); // `abort` destroys the connection with no event.
       rawRequest.destroy();
     };
 
@@ -1082,7 +1081,6 @@ function setupSocket<T extends Socket | TLSSocket>(
   const cleanup = () => {
     socket.removeListener("free", onFree);
     socket.removeListener("close", cleanup);
-    socket.removeListener("agentRemove", cleanup);
     socket.removeListener("timeout", onTimeout);
     manager.delete(key, socket);
   };
@@ -1093,7 +1091,6 @@ function setupSocket<T extends Socket | TLSSocket>(
 
   socket.on("free", onFree);
   socket.on("close", cleanup);
-  socket.on("agentRemove", cleanup);
   socket.on("timeout", onTimeout);
 
   if (config.keepAlive > 0) socket.setKeepAlive(true, config.keepAlive);

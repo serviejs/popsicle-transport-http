@@ -7,7 +7,6 @@ import {
   transport,
   Http2ConnectionManager,
   SocketConnectionManager,
-  Http2Response,
   NegotiateHttpVersion,
   defaultHttp2Connect,
   defaultTlsConnect,
