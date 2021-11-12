@@ -1,25 +1,26 @@
 import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
+import type { Socket, AddressInfo } from "net";
 import {
   transport,
-  Http2ConnectionManager,
   SocketConnectionManager,
-  Http2Response,
   NegotiateHttpVersion,
   defaultHttp2Connect,
   defaultTlsConnect,
   defaultNetConnect,
   ConnectionError,
+  CausedByTimeoutError,
+  HttpResponse,
 } from "./index";
-import { server as httpServer } from "./test-server/http";
-import { server as httpsServer } from "./test-server/https";
+import {
+  server as httpServer,
+  tlsServer as httpsServer,
+} from "./test-server/http";
 import {
   server as http2Server,
   tlsServer as http2TlsServer,
 } from "./test-server/http2";
-import type { Socket, AddressInfo } from "net";
-import type { TLSSocket } from "tls";
 
 const ca = readFileSync(join(__dirname, "./test-server/support/ca-crt.pem"));
 
@@ -172,11 +173,31 @@ describe("popsicle transport http", () => {
   it("should abort mid-request", async () => {
     const controller = new AbortController();
     const req = new Request(`${TEST_HTTP_URL}/download`, controller);
+
+    const spy = jest.fn();
+    req.signal.on("responseBytes", spy);
+
     const res = await transport()(req, done);
 
     setTimeout(() => controller.abort(), 100);
 
     expect(await res.text()).toEqual("hello ");
+    expect(spy).toBeCalledWith(6);
+  });
+
+  it("should abort mid-request with http2", async () => {
+    const controller = new AbortController();
+    const req = new Request(`${TEST_HTTP2_TLS_URL}/download`, controller);
+
+    const spy = jest.fn();
+    req.signal.on("responseBytes", spy);
+
+    const res = await transport({ rejectUnauthorized: false })(req, done);
+
+    setTimeout(() => controller.abort(), 100);
+
+    expect(await res.text()).toEqual("hello ");
+    expect(spy).toBeCalledWith(6);
   });
 
   it("should have no side effects aborting twice", async () => {
@@ -199,25 +220,20 @@ describe("popsicle transport http", () => {
 
   it("should emit download progress", async () => {
     const req = new Request(`${TEST_HTTP_URL}/download`);
+
     const spy = jest.fn();
-
-    const res = await transport()(req, done);
-
     req.signal.on("responseBytes", spy);
 
+    const res = await transport()(req, done);
     expect(await res.text()).toEqual("hello world!");
-
-    // Check spy after body has loaded.
     expect(spy).toBeCalledWith(12);
   });
 
   it("should re-use net socket", async () => {
-    const netSockets = new SocketConnectionManager<Socket>();
     const createNetConnection = jest.fn(defaultNetConnect);
 
     const send = transport({
       createNetConnection,
-      netSockets,
     });
 
     const req = new Request(TEST_HTTP_URL);
@@ -273,13 +289,11 @@ describe("popsicle transport http", () => {
   });
 
   it("should create new socket without keep alive", async () => {
-    const netSockets = new SocketConnectionManager<Socket>();
     const createNetConnection = jest.fn(defaultNetConnect);
 
     const send = transport({
       keepAlive: -1,
       createNetConnection,
-      netSockets,
     });
 
     const req = new Request(TEST_HTTP_URL);
@@ -342,13 +356,11 @@ describe("popsicle transport http", () => {
   });
 
   it("should re-use tls socket", async () => {
-    const tlsSockets = new SocketConnectionManager<TLSSocket>();
     const createTlsConnection = jest.fn(defaultTlsConnect);
 
     const send = transport({
       rejectUnauthorized: false,
       createTlsConnection,
-      tlsSockets,
     });
 
     const req = new Request(TEST_HTTPS_URL);
@@ -371,8 +383,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Not using TLS");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to http2 server", async () => {
@@ -380,8 +392,8 @@ describe("popsicle transport http", () => {
     const res = await transport({ rejectUnauthorized: false })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Using TLS over HTTP 2.0");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to http2 server using http2 only", async () => {
@@ -392,8 +404,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(res).toBeInstanceOf(Http2Response);
-    expect(await res.text()).toEqual("Using TLS over HTTP 2.0");
+    expect((res as HttpResponse).httpVersion).toEqual("2.0");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should connect to https server using http1 only", async () => {
@@ -404,7 +416,8 @@ describe("popsicle transport http", () => {
     })(req, done);
 
     expect(res.status).toEqual(200);
-    expect(await res.text()).toEqual("Using TLS over HTTP 1.1");
+    expect((res as HttpResponse).httpVersion).toEqual("1.1");
+    expect(await res.text()).toEqual("Success");
   });
 
   it("should re-use http2 client", async () => {
@@ -412,7 +425,6 @@ describe("popsicle transport http", () => {
 
     const send = transport({
       rejectUnauthorized: false,
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
     });
 
@@ -430,7 +442,6 @@ describe("popsicle transport http", () => {
     const createHttp2Connection = jest.fn(defaultHttp2Connect);
 
     const send = transport({
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
       negotiateHttpVersion: NegotiateHttpVersion.HTTP2_ONLY,
     });
@@ -450,7 +461,6 @@ describe("popsicle transport http", () => {
 
     const send = transport({
       rejectUnauthorized: false,
-      http2Sessions: new Http2ConnectionManager(),
       createHttp2Connection,
     });
 
@@ -470,7 +480,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      netSockets: new SocketConnectionManager(),
     });
 
     const req = new Request(`${TEST_HTTP_URL}/status/200`);
@@ -488,7 +497,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      tlsSockets: new SocketConnectionManager(),
     });
 
     const req = new Request(`${TEST_HTTPS_URL}/status/200`);
@@ -506,8 +514,6 @@ describe("popsicle transport http", () => {
     const send = transport({
       rejectUnauthorized: false,
       lookup,
-      tlsSockets: new SocketConnectionManager(),
-      http2Sessions: new Http2ConnectionManager(),
     });
 
     const req = new Request(TEST_HTTP2_TLS_URL);
@@ -522,14 +528,123 @@ describe("popsicle transport http", () => {
       expect.assertions(1);
 
       try {
-        await transport({ rejectUnauthorized: false })(
-          new Request(`${url}/close`),
-          done
-        );
+        await transport({
+          rejectUnauthorized: false,
+          negotiateHttpVersion:
+            url === TEST_HTTP2_URL
+              ? NegotiateHttpVersion.HTTP2_ONLY
+              : undefined,
+        })(new Request(`${url}/close`), done);
       } catch (err) {
         if (err instanceof ConnectionError) {
           expect(err.code).toEqual("EUNAVAILABLE");
         }
+      }
+    });
+
+    it(`should handle request timeouts to ${url}`, async () => {
+      const createNetConnection = jest.fn(defaultNetConnect);
+      const createTlsConnection = jest.fn(defaultTlsConnect);
+      const createHttp2Connection = jest.fn(defaultHttp2Connect);
+
+      const send = transport({
+        idleRequestTimeout: 50,
+        rejectUnauthorized: false,
+        negotiateHttpVersion:
+          url === TEST_HTTP2_URL || url === TEST_HTTP2_TLS_URL
+            ? NegotiateHttpVersion.HTTP2_ONLY
+            : undefined,
+        createNetConnection,
+        createTlsConnection,
+        createHttp2Connection,
+      });
+
+      expect.assertions(5);
+
+      try {
+        await send(new Request(`${url}/timeout`), done);
+      } catch (err) {
+        if (err instanceof ConnectionError) {
+          expect(err.code).toEqual("EUNAVAILABLE");
+          expect(err.cause).toBeInstanceOf(CausedByTimeoutError);
+        }
+      }
+
+      // Test connection re-use from previous step without timeout.
+      const res = await send(new Request(url), done);
+
+      expect(await res.text()).toEqual("Success");
+
+      switch (url) {
+        case TEST_HTTP2_TLS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createTlsConnection).toBeCalledTimes(1);
+          break;
+        case TEST_HTTP2_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createNetConnection).toBeCalledTimes(1);
+          break;
+        case TEST_HTTPS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+      }
+    });
+
+    it(`should handle socket timeouts to ${url}`, async () => {
+      const createNetConnection = jest.fn(defaultNetConnect);
+      const createTlsConnection = jest.fn(defaultTlsConnect);
+      const createHttp2Connection = jest.fn(defaultHttp2Connect);
+
+      const send = transport({
+        idleSocketTimeout: 50,
+        rejectUnauthorized: false,
+        negotiateHttpVersion:
+          url === TEST_HTTP2_URL || url === TEST_HTTP2_TLS_URL
+            ? NegotiateHttpVersion.HTTP2_ONLY
+            : undefined,
+        createNetConnection,
+        createTlsConnection,
+        createHttp2Connection,
+      });
+
+      expect.assertions(5);
+
+      try {
+        await send(new Request(`${url}/timeout`), done);
+      } catch (err) {
+        if (err instanceof ConnectionError) {
+          expect(err.code).toEqual("EUNAVAILABLE");
+          expect(err.cause).toBeInstanceOf(CausedByTimeoutError);
+        }
+      }
+
+      // Test connection re-use from previous step without timeout.
+      const res = await send(new Request(url), done);
+
+      expect(await res.text()).toEqual("Success");
+
+      switch (url) {
+        case TEST_HTTP2_TLS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP2_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTPS_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP_URL:
+          expect((res as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
       }
     });
   }
