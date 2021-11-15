@@ -1076,11 +1076,11 @@ function setupSocket<T extends Socket | TLSSocket>(
   const onFree = () => freeSocket(manager, key, socket, config);
 
   const cleanup = () => {
+    manager.delete(key, socket);
     socket.removeListener("free", onFree);
     socket.removeListener("close", cleanup);
     socket.removeListener("error", cleanup);
     socket.removeListener("timeout", onTimeout);
-    manager.delete(key, socket);
   };
 
   const onTimeout = () => {

@@ -619,7 +619,8 @@ describe("popsicle transport http", () => {
       const res1 = await send(new Request(url), done);
       expect(await res1.text()).toEqual("Success");
 
-      await wait(50);
+      // Node.js v10 has trouble with the timeout being executed on time here.
+      await wait(process.version.startsWith("v10.") ? 51 : 50);
 
       const res2 = await send(new Request(url), done);
       expect(await res2.text()).toEqual("Success");
