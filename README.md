@@ -26,7 +26,9 @@ const res = await transport()(req, done);
 
 The `transport` function sends the Servie `Request` to a remote server.
 
-- `keepAlive?: number` Duration to keep connection alive for re-use (default: `5000`)
+- `keepAlive?: number` Keep connection alive for re-use with delay between probe (default: `5000`, 5 seconds)
+- `idleSocketTimeout?: number` Maximum duration for a socket to have no traffic (default: `300_000`, 5 minutes)
+- `idleRequestTimeout?: number` Maximum duration for a HTTP request to have no traffic (default: `30_000`, 30 seconds)
 - `servername?: string` Override remote server name for TLS
 - `rejectUnauthorized?: boolean` Rejects unauthorized TLS connections
 - `negotiateHttpVersion?: NegotiateHttpVersion` Configure HTTP version negotiation (default: `HTTP2_FOR_HTTPS`)
