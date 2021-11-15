@@ -1056,10 +1056,9 @@ function freeSocket<T extends Socket | TLSSocket>(
   socket: T,
   config: TransportConfig
 ) {
-  socket.setTimeout(config.idleSocketTimeout);
-
   const shouldDestroy = manager.freed(key, socket);
-  if (shouldDestroy) socket.destroy();
+  if (shouldDestroy) return socket.destroy();
+  socket.setTimeout(config.idleSocketTimeout);
 }
 
 /**
