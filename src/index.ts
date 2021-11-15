@@ -838,8 +838,7 @@ export function transport(
         });
       });
 
-      // Claim net socket for usage after `ready`.
-      netSockets.used(connectionKey, socket);
+      claimSocket(netSockets, connectionKey, socket, config);
 
       // Use existing HTTP2 session in HTTP2-only mode.
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP2_ONLY) {
@@ -847,7 +846,7 @@ export function transport(
           connectionKey,
           (existingClient) => {
             if (existingClient) {
-              netSockets.freed(connectionKey, socket);
+              freeSocket(netSockets, connectionKey, socket, config);
               return existingClient;
             }
 
@@ -932,8 +931,7 @@ export function transport(
         });
       });
 
-      // Claim TLS socket after `ready`.
-      tlsSockets.used(connectionKey, socket);
+      claimSocket(tlsSockets, connectionKey, socket, config);
 
       if (negotiateHttpVersion === NegotiateHttpVersion.HTTP1_ONLY) {
         return execHttp1(req, url, socket, config);
@@ -944,7 +942,7 @@ export function transport(
           connectionKey,
           (existingClient) => {
             if (existingClient) {
-              tlsSockets.freed(connectionKey, socket);
+              freeSocket(tlsSockets, connectionKey, socket, config);
               return existingClient;
             }
 
@@ -994,7 +992,7 @@ export function transport(
               http2Sessions
                 .ready(connectionKey, (existingClient) => {
                   if (existingClient) {
-                    tlsSockets.freed(connectionKey, socket);
+                    freeSocket(tlsSockets, connectionKey, socket, config);
                     return existingClient;
                   }
 
@@ -1037,6 +1035,34 @@ export function transport(
 }
 
 /**
+ * Set socket config for usage, and configure for issues between assigning a socket and making the request.
+ */
+function claimSocket<T extends Socket | TLSSocket>(
+  manager: ConnectionManager<T>,
+  key: string,
+  socket: T,
+  config: TransportConfig
+) {
+  socket.setTimeout(config.idleSocketTimeout);
+  manager.used(key, socket);
+}
+
+/**
+ * Free a socket in the manager.
+ */
+function freeSocket<T extends Socket | TLSSocket>(
+  manager: ConnectionManager<T>,
+  key: string,
+  socket: T,
+  config: TransportConfig
+) {
+  socket.setTimeout(config.idleSocketTimeout);
+
+  const shouldDestroy = manager.freed(key, socket);
+  if (shouldDestroy) socket.destroy();
+}
+
+/**
  * Setup the socket with the connection manager.
  *
  * Ref: https://github.com/nodejs/node/blob/531b4bedcac14044f09129ffb65dab71cc2707d9/lib/_http_agent.js#L254
@@ -1047,12 +1073,7 @@ function setupSocket<T extends Socket | TLSSocket>(
   socket: T,
   config: TransportConfig
 ) {
-  const onFree = () => {
-    socket.setTimeout(config.idleSocketTimeout);
-
-    const shouldDestroy = manager.freed(key, socket);
-    if (shouldDestroy) socket.destroy();
-  };
+  const onFree = () => freeSocket(manager, key, socket, config);
 
   const cleanup = () => {
     socket.removeListener("free", onFree);
@@ -1072,7 +1093,6 @@ function setupSocket<T extends Socket | TLSSocket>(
   socket.once("error", cleanup);
   socket.once("timeout", onTimeout);
 
-  socket.setTimeout(config.idleSocketTimeout);
   if (config.keepAlive > 0) socket.setKeepAlive(true, config.keepAlive);
 }
 
