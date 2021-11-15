@@ -1048,31 +1048,32 @@ function setupSocket<T extends Socket | TLSSocket>(
   config: TransportConfig
 ) {
   const onFree = () => {
+    socket.setTimeout(config.idleSocketTimeout);
+
     const shouldDestroy = manager.freed(key, socket);
     if (shouldDestroy) socket.destroy();
-
-    // Reset any timeout added by HTTP requests.
-    if (config.idleSocketTimeout > 0) {
-      socket.setTimeout(config.idleSocketTimeout);
-    }
   };
 
-  const onClose = () => {
+  const cleanup = () => {
     socket.removeListener("free", onFree);
+    socket.removeListener("close", cleanup);
+    socket.removeListener("error", cleanup);
     socket.removeListener("timeout", onTimeout);
     manager.delete(key, socket);
   };
 
   const onTimeout = () => {
     socket.destroy();
+    return cleanup();
   };
 
   socket.on("free", onFree);
-  socket.once("close", onClose);
+  socket.once("close", cleanup);
+  socket.once("error", cleanup);
   socket.once("timeout", onTimeout);
 
+  socket.setTimeout(config.idleSocketTimeout);
   if (config.keepAlive > 0) socket.setKeepAlive(true, config.keepAlive);
-  if (config.idleSocketTimeout > 0) socket.setTimeout(config.idleSocketTimeout);
 }
 
 /**

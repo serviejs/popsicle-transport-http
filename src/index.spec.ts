@@ -2,6 +2,7 @@ import { join } from "path";
 import { readFileSync, createReadStream } from "fs";
 import { Request, AbortController } from "servie/dist/node";
 import type { Socket, AddressInfo } from "net";
+import { promisify } from "util";
 import {
   transport,
   SocketConnectionManager,
@@ -23,6 +24,7 @@ import {
 } from "./test-server/http2";
 
 const ca = readFileSync(join(__dirname, "./test-server/support/ca-crt.pem"));
+const wait = promisify(setTimeout);
 
 describe("popsicle transport http", () => {
   const httpAddress = httpServer.listen(0).address() as AddressInfo;
@@ -596,6 +598,53 @@ describe("popsicle transport http", () => {
     });
 
     it(`should handle socket timeouts to ${url}`, async () => {
+      const createNetConnection = jest.fn(defaultNetConnect);
+      const createTlsConnection = jest.fn(defaultTlsConnect);
+      const createHttp2Connection = jest.fn(defaultHttp2Connect);
+
+      const send = transport({
+        idleSocketTimeout: 50,
+        rejectUnauthorized: false,
+        negotiateHttpVersion:
+          url === TEST_HTTP2_URL || url === TEST_HTTP2_TLS_URL
+            ? NegotiateHttpVersion.HTTP2_ONLY
+            : undefined,
+        createNetConnection,
+        createTlsConnection,
+        createHttp2Connection,
+      });
+
+      expect.assertions(4);
+
+      const res1 = await send(new Request(url), done);
+      expect(await res1.text()).toEqual("Success");
+
+      await wait(50);
+
+      const res2 = await send(new Request(url), done);
+      expect(await res2.text()).toEqual("Success");
+
+      switch (url) {
+        case TEST_HTTP2_TLS_URL:
+          expect((res2 as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP2_URL:
+          expect((res2 as HttpResponse).httpVersion).toEqual("2.0");
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTPS_URL:
+          expect((res2 as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createTlsConnection).toBeCalledTimes(2);
+          break;
+        case TEST_HTTP_URL:
+          expect((res2 as HttpResponse).httpVersion).toEqual("1.1");
+          expect(createNetConnection).toBeCalledTimes(2);
+          break;
+      }
+    });
+
+    it(`should handle socket timeouts during a request to ${url}`, async () => {
       const createNetConnection = jest.fn(defaultNetConnect);
       const createTlsConnection = jest.fn(defaultTlsConnect);
       const createHttp2Connection = jest.fn(defaultHttp2Connect);
